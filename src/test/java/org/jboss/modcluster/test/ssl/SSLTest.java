@@ -23,6 +23,10 @@ public class SSLTest {
     @InjectSoftAssertions
     private SoftAssertions softly;
 
+    /**
+     * Verifies that HTTPS connections to the balancer work correctly.
+     * Passes if a single HTTPS request returns status 200.
+     */
     @Test
     public void testHttpsConnectionToBalancer(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(1);
@@ -38,6 +42,10 @@ public class SSLTest {
                 .isEqualTo(200);
     }
 
+    /**
+     * Verifies that HTTPS load balancing works correctly with multiple workers.
+     * Passes if 10 consecutive HTTPS requests all return status 200.
+     */
     @Test
     public void testHttpsWithMultipleWorkers(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
@@ -56,6 +64,10 @@ public class SSLTest {
         }
     }
 
+    /**
+     * Verifies that HTTP sessions are maintained correctly over HTTPS connections.
+     * Passes if a JSESSIONID cookie is established and 5 subsequent HTTPS requests succeed.
+     */
     @Test
     public void testSslSessionPersistence(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);

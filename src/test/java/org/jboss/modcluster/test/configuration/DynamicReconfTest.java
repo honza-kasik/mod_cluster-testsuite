@@ -28,6 +28,10 @@ public class DynamicReconfTest {
     @InjectSoftAssertions
     private SoftAssertions softly;
 
+    /**
+     * Verifies that workers can be dynamically added to a running cluster and automatically register with the balancer.
+     * Passes if worker2 registers within 30 seconds and both workers receive traffic.
+     */
     @Test
     public void testDynamicWorkerRegistration(TestCluster cluster, HttpClient httpClient) throws Exception {
         // Start with one worker
@@ -72,6 +76,10 @@ public class DynamicReconfTest {
         worker2.stop();
     }
 
+    /**
+     * Verifies that mod_cluster configuration attributes can be changed dynamically without server restart.
+     * Passes if flush-packets attribute can be toggled and the change is immediately reflected.
+     */
     @Test
     public void testDynamicConfigurationChange(TestCluster cluster) throws Exception {
         cluster.startWorkers(1);
@@ -100,6 +108,10 @@ public class DynamicReconfTest {
         worker.writeModClusterAttribute("flush-packets", originalValue);
     }
 
+    /**
+     * Verifies that workers automatically unregister from the balancer when stopped.
+     * Passes if traffic stops routing to worker1 within 60 seconds after it is stopped.
+     */
     @Test
     public void testWorkerUnregistrationAndReregistration(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);

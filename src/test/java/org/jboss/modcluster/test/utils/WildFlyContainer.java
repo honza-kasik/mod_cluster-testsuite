@@ -6,9 +6,11 @@ import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.wildfly.extras.creaper.core.ManagementClient;
+import org.wildfly.extras.creaper.core.online.ModelNodeResult;
 import org.wildfly.extras.creaper.core.online.OnlineManagementClient;
 import org.wildfly.extras.creaper.core.online.OnlineOptions;
 import org.wildfly.extras.creaper.core.online.operations.Address;
+import org.wildfly.extras.creaper.core.online.operations.OperationException;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
 import org.wildfly.extras.creaper.core.online.operations.admin.Administration;
 import org.wildfly.extras.creaper.commands.deployments.Deploy;
@@ -155,13 +157,13 @@ public class WildFlyContainer {
             org.jboss.dmr.ModelNode proxyList = new org.jboss.dmr.ModelNode();
             proxyList.add("modcluster-balancer");
 
-            org.wildfly.extras.creaper.core.online.ModelNodeResult writeResult =
+            ModelNodeResult writeResult =
                 ops.writeAttribute(mcProxyAddress, "proxies", proxyList);
             writeResult.assertSuccess();
 
             // Step 3: Set listener to "default" for HTTP communication with Undertow balancers
             // (default listener attribute is "ajp" which is for Apache httpd)
-            org.wildfly.extras.creaper.core.online.ModelNodeResult listenerResult =
+            ModelNodeResult listenerResult =
                 ops.writeAttribute(mcProxyAddress, "listener", "default");
             listenerResult.assertSuccess();
 
@@ -455,7 +457,7 @@ public class WildFlyContainer {
     /**
      * Check if a deployment exists and is enabled.
      */
-    public boolean isDeployed(String deploymentName) throws IOException, org.wildfly.extras.creaper.core.online.operations.OperationException {
+    public boolean isDeployed(String deploymentName) throws IOException, OperationException {
         Operations ops = getOperations();
         Address deploymentAddress = Address.deployment(deploymentName);
 
@@ -463,7 +465,7 @@ public class WildFlyContainer {
             return false;
         }
 
-        org.wildfly.extras.creaper.core.online.ModelNodeResult result = ops.readAttribute(deploymentAddress, "enabled");
+        ModelNodeResult result = ops.readAttribute(deploymentAddress, "enabled");
         result.assertSuccess();
         return result.value().asBoolean();
     }
@@ -481,10 +483,10 @@ public class WildFlyContainer {
     /**
      * Read a mod_cluster subsystem attribute.
      */
-    public ModelNode readModClusterAttribute(String attributeName) throws IOException, org.wildfly.extras.creaper.core.online.operations.OperationException {
+    public ModelNode readModClusterAttribute(String attributeName) throws IOException, OperationException {
         Operations ops = getOperations();
         Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
-        org.wildfly.extras.creaper.core.online.ModelNodeResult result = ops.readAttribute(modclusterAddress, attributeName);
+        ModelNodeResult result = ops.readAttribute(modclusterAddress, attributeName);
         result.assertSuccess();
         return result.value();
     }
@@ -492,11 +494,11 @@ public class WildFlyContainer {
     /**
      * Write a mod_cluster subsystem attribute.
      */
-    public void writeModClusterAttribute(String attributeName, Object value) throws IOException, org.wildfly.extras.creaper.core.online.operations.OperationException {
+    public void writeModClusterAttribute(String attributeName, Object value) throws IOException, OperationException {
         Operations ops = getOperations();
         Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
 
-        org.wildfly.extras.creaper.core.online.ModelNodeResult result;
+        ModelNodeResult result;
 
         // Handle different value types
         if (value instanceof Boolean) {

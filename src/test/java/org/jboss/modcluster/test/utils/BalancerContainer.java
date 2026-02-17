@@ -7,6 +7,13 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
+import org.wildfly.extras.creaper.core.ManagementClient;
+import org.wildfly.extras.creaper.core.online.OnlineManagementClient;
+import org.wildfly.extras.creaper.core.online.OnlineOptions;
+import org.wildfly.extras.creaper.core.online.operations.Address;
+import org.wildfly.extras.creaper.core.online.operations.Operations;
+import org.wildfly.extras.creaper.core.online.operations.Values;
+import org.wildfly.extras.creaper.core.online.operations.admin.Administration;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -145,16 +152,16 @@ public abstract class BalancerContainer {
                 // Wait for management interface
                 Thread.sleep(5000);
 
-                org.wildfly.extras.creaper.core.online.OnlineManagementClient client =
-                    org.wildfly.extras.creaper.core.ManagementClient.online(
-                        org.wildfly.extras.creaper.core.online.OnlineOptions.standalone()
+                OnlineManagementClient client =
+                    ManagementClient.online(
+                        OnlineOptions.standalone()
                             .hostAndPort(container.getHost(), container.getMappedPort(MANAGEMENT_PORT))
                             .auth("admin", "admin")
                             .build()
                     );
 
-                org.wildfly.extras.creaper.core.online.operations.Operations ops =
-                    new org.wildfly.extras.creaper.core.online.operations.Operations(client);
+                Operations ops =
+                    new Operations(client);
 
                 log.info("Configuring Undertow mod_cluster filter on balancer (admin-only mode)");
 
@@ -163,8 +170,8 @@ public abstract class BalancerContainer {
                     .values().iterator().next().getIpAddress();
                 log.info("Container IP: {}", containerIp);
 
-                org.wildfly.extras.creaper.core.online.operations.Address publicInterfaceAddr =
-                    org.wildfly.extras.creaper.core.online.operations.Address.of("interface", "public");
+                Address publicInterfaceAddr =
+                    Address.of("interface", "public");
 
                 // Undefine any-address first, then set inet-address
                 ops.undefineAttribute(publicInterfaceAddr, "any-address");
@@ -173,45 +180,45 @@ public abstract class BalancerContainer {
                 log.info("Public interface configured to: {}", containerIp);
 
                 // Step 1: Create dedicated socket binding for MCMP (must not be wildcard 0.0.0.0)
-                org.wildfly.extras.creaper.core.online.operations.Address mcmpSocketAddr =
-                    org.wildfly.extras.creaper.core.online.operations.Address
+                Address mcmpSocketAddr =
+                    Address
                         .of("socket-binding-group", "standard-sockets")
                         .and("socket-binding", "modcluster-mcmp");
 
                 ops.add(mcmpSocketAddr,
-                    org.wildfly.extras.creaper.core.online.operations.Values.of("port", HTTP_PORT)
+                    Values.of("port", HTTP_PORT)
                         .and("interface", "public"))
                     .assertSuccess("Failed to add MCMP socket binding");
                 log.info("MCMP socket binding created");
 
                 // Step 2: Create multicast socket binding for advertisement
-                org.wildfly.extras.creaper.core.online.operations.Address multicastAddr =
-                    org.wildfly.extras.creaper.core.online.operations.Address
+                Address multicastAddr =
+                    Address
                         .of("socket-binding-group", "standard-sockets")
                         .and("socket-binding", "modcluster");
 
                 ops.add(multicastAddr,
-                    org.wildfly.extras.creaper.core.online.operations.Values.of("port", 0)
+                    Values.of("port", 0)
                         .and("multicast-address", "224.0.1.105")
                         .and("multicast-port", 23364))
                     .assertSuccess("Failed to add multicast socket binding");
                 log.info("Multicast socket binding created");
 
                 // Step 3: Add mod_cluster filter to undertow with dedicated MCMP socket
-                org.wildfly.extras.creaper.core.online.operations.Address filterAddr =
-                    org.wildfly.extras.creaper.core.online.operations.Address.subsystem("undertow")
+                Address filterAddr =
+                    Address.subsystem("undertow")
                         .and("configuration", "filter")
                         .and("mod-cluster", "modcluster");
 
                 ops.add(filterAddr,
-                    org.wildfly.extras.creaper.core.online.operations.Values.of("management-socket-binding", "modcluster-mcmp")
+                    Values.of("management-socket-binding", "modcluster-mcmp")
                         .and("advertise-socket-binding", "modcluster"))
                     .assertSuccess("Failed to add mod_cluster filter");
                 log.info("Mod_cluster filter created");
 
                 // Step 4: Add filter-ref to default-host (following CLILib order)
-                org.wildfly.extras.creaper.core.online.operations.Address filterRefAddr =
-                    org.wildfly.extras.creaper.core.online.operations.Address.subsystem("undertow")
+                Address filterRefAddr =
+                    Address.subsystem("undertow")
                         .and("server", "default-server")
                         .and("host", "default-host")
                         .and("filter-ref", "modcluster");
@@ -222,7 +229,7 @@ public abstract class BalancerContainer {
 
                 // Step 5: Reload from admin-only mode to normal mode (like noe-tests stop/start)
                 log.info("Reloading server to transition from admin-only to normal mode");
-                new org.wildfly.extras.creaper.core.online.operations.admin.Administration(client).reload();
+                new Administration(client).reload();
 
                 client.close();
 

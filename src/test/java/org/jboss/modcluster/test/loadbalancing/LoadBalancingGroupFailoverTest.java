@@ -27,6 +27,10 @@ public class LoadBalancingGroupFailoverTest {
     @InjectSoftAssertions
     private SoftAssertions softly;
 
+    /**
+     * Verifies that load is distributed across multiple workers by the balancer.
+     * Passes if both workers receive requests and the distribution ratio is at least 0.55.
+     */
     @Test
     public void testLoadDistributionAcrossWorkers(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
@@ -55,6 +59,10 @@ public class LoadBalancingGroupFailoverTest {
                 .isGreaterThanOrEqualTo(0.55);
     }
 
+    /**
+     * Verifies that the balancer automatically fails over to remaining workers when one worker stops.
+     * Passes if all traffic routes to worker2 within 60 seconds after worker1 is stopped.
+     */
     @Test
     public void testFailoverWhenWorkerStops(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);

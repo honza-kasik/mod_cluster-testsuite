@@ -24,6 +24,10 @@ public class StickySessionTest {
     @InjectSoftAssertions
     private SoftAssertions softly;
 
+    /**
+     * Verifies that requests with the same session cookie are consistently routed to the same worker.
+     * Passes if 10 consecutive requests with the same JSESSIONID all route to the initially assigned worker.
+     */
     @Test
     public void testStickySessionsMaintainedAcrossRequests(TestCluster cluster, HttpClient httpClient) throws Exception {
         // Start two workers
@@ -65,6 +69,10 @@ public class StickySessionTest {
         }
     }
 
+    /**
+     * Verifies that multiple concurrent clients each maintain sticky session affinity to their assigned worker.
+     * Passes if 5 simulated clients each make 5 requests that all route to their respective assigned workers.
+     */
     @Test
     public void testSessionAffinityWithMultipleClients(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);

@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.wildfly.extras.creaper.core.online.ModelNodeResult;
 import org.wildfly.extras.creaper.core.online.operations.Address;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
 
@@ -26,6 +27,10 @@ public class CliManagementTest {
     @InjectSoftAssertions
     private SoftAssertions softly;
 
+    /**
+     * Verifies that mod_cluster subsystem configuration can be read via Creaper.
+     * Passes if the subsystem resource is readable and has a proxy defined.
+     */
     @Test
     public void testReadModClusterConfiguration(TestCluster cluster) throws Exception {
         cluster.startWorkers(1);
@@ -35,7 +40,7 @@ public class CliManagementTest {
         Operations ops = worker.getOperations();
         Address modclusterAddress = Address.subsystem("modcluster");
 
-        org.wildfly.extras.creaper.core.online.ModelNodeResult nodeResult = ops.readResource(modclusterAddress);
+        ModelNodeResult nodeResult = ops.readResource(modclusterAddress);
         nodeResult.assertSuccess();
         ModelNode result = nodeResult.value();
 
@@ -46,6 +51,10 @@ public class CliManagementTest {
                 .isTrue();
     }
 
+    /**
+     * Verifies that proxy list can be retrieved from mod_cluster subsystem.
+     * Passes if at least one proxy is configured and returned.
+     */
     @Test
     public void testEnableContextViaCLI(TestCluster cluster) throws Exception {
         cluster.startWorkers(1);
@@ -55,7 +64,7 @@ public class CliManagementTest {
         Operations ops = worker.getOperations();
         Address modclusterAddress = Address.subsystem("modcluster");
 
-        org.wildfly.extras.creaper.core.online.ModelNodeResult nodeResult = ops.readChildrenNames(modclusterAddress, "proxy");
+        ModelNodeResult nodeResult = ops.readChildrenNames(modclusterAddress, "proxy");
         nodeResult.assertSuccess();
         ModelNode result = nodeResult.value();
 
@@ -66,6 +75,10 @@ public class CliManagementTest {
                 .isNotEmpty();
     }
 
+    /**
+     * Verifies that mod_cluster attributes can be read using Creaper helper methods.
+     * Passes if the status-interval attribute is defined and readable.
+     */
     @Test
     public void testDisableContextViaCLI(TestCluster cluster) throws Exception {
         cluster.startWorkers(1);
@@ -81,6 +94,10 @@ public class CliManagementTest {
                 .isTrue();
     }
 
+    /**
+     * Verifies that proxy configuration details can be read from mod_cluster subsystem.
+     * Passes if proxy names are retrievable and proxy configuration is defined.
+     */
     @Test
     public void testModClusterProxyInfo(TestCluster cluster) throws Exception {
         cluster.startWorkers(1);
@@ -91,7 +108,7 @@ public class CliManagementTest {
         Address modclusterAddress = Address.subsystem("modcluster");
 
         // First, get the list of proxy names
-        org.wildfly.extras.creaper.core.online.ModelNodeResult proxyNamesResult =
+        ModelNodeResult proxyNamesResult =
             ops.readChildrenNames(modclusterAddress, "proxy");
         proxyNamesResult.assertSuccess();
 
@@ -105,7 +122,7 @@ public class CliManagementTest {
         String proxyName = proxyNamesResult.value().asList().get(0).asString();
         Address proxyAddress = modclusterAddress.and("proxy", proxyName);
 
-        org.wildfly.extras.creaper.core.online.ModelNodeResult proxyResult = ops.readResource(proxyAddress);
+        ModelNodeResult proxyResult = ops.readResource(proxyAddress);
         proxyResult.assertSuccess();
         ModelNode proxyConfig = proxyResult.value();
 
@@ -116,6 +133,10 @@ public class CliManagementTest {
                 .isTrue();
     }
 
+    /**
+     * Verifies that mod_cluster attributes can be read and written using Creaper.
+     * Passes if status-interval can be read, updated to 20, and the change is reflected.
+     */
     @Test
     public void testModClusterStatusInterval(TestCluster cluster) throws Exception {
         cluster.startWorkers(1);
@@ -148,6 +169,10 @@ public class CliManagementTest {
         worker.writeModClusterAttribute("status-interval", originalValue);
     }
 
+    /**
+     * Verifies that deployment status can be checked using Creaper helper methods.
+     * Passes if demo.war is reported as deployed and enabled.
+     */
     @Test
     public void testCheckDeploymentStatus(TestCluster cluster) throws Exception {
         cluster.startWorkers(1);

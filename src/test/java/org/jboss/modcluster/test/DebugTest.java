@@ -11,6 +11,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.wildfly.extras.creaper.core.ManagementClient;
+import org.wildfly.extras.creaper.core.online.ModelNodeResult;
+import org.wildfly.extras.creaper.core.online.OnlineManagementClient;
+import org.wildfly.extras.creaper.core.online.OnlineOptions;
+import org.wildfly.extras.creaper.core.online.operations.Address;
+import org.wildfly.extras.creaper.core.online.operations.Operations;
+import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
 
 @ExtendWith({ModClusterTestExtension.class, SoftAssertionsExtension.class})
 public class DebugTest {
@@ -20,6 +27,10 @@ public class DebugTest {
     @InjectSoftAssertions
     private SoftAssertions softly;
 
+    /**
+     * Diagnostic test to verify worker registration and balancer configuration by accessing both directly and via balancer.
+     * Passes if both direct worker access and balancer-routed requests return status 200.
+     */
     @Test
     public void testDirectWorkerAccess(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(1);
@@ -40,30 +51,30 @@ public class DebugTest {
         log.info("Balancer response: {} - {}", balancerResponse.getStatusCode(), balancerResponse.getBody());
 
         // Check mod_cluster proxy info
-        org.wildfly.extras.creaper.core.online.operations.Operations ops = cluster.getWorker1().getOperations();
-        org.wildfly.extras.creaper.core.online.operations.Address mcAddress =
-            org.wildfly.extras.creaper.core.online.operations.Address.subsystem("modcluster");
+        Operations ops = cluster.getWorker1().getOperations();
+        Address mcAddress =
+            Address.subsystem("modcluster");
 
-        org.wildfly.extras.creaper.core.online.ModelNodeResult proxyListResult =
+        ModelNodeResult proxyListResult =
             ops.readAttribute(mcAddress.and("proxy", "default"), "proxies");
         proxyListResult.assertSuccess();
         log.info("Proxy list on worker: {}", proxyListResult.value());
 
         // Check full mod_cluster proxy configuration
-        org.wildfly.extras.creaper.core.online.ModelNodeResult proxyConfigResult =
+        ModelNodeResult proxyConfigResult =
             ops.readResource(mcAddress.and("proxy", "default"),
-                org.wildfly.extras.creaper.core.online.operations.ReadResourceOption.INCLUDE_RUNTIME);
+                ReadResourceOption.INCLUDE_RUNTIME);
         log.info("Worker proxy config: status={}, enabled={}, listener={}",
             proxyConfigResult.value().get("status"),
             proxyConfigResult.value().get("enabled"),
             proxyConfigResult.value().get("listener"));
 
         // Check the outbound-socket-binding
-        org.wildfly.extras.creaper.core.online.operations.Address socketBindingAddr =
-            org.wildfly.extras.creaper.core.online.operations.Address
+        Address socketBindingAddr =
+            Address
                 .of("socket-binding-group", "standard-sockets")
                 .and("remote-destination-outbound-socket-binding", "modcluster-balancer");
-        org.wildfly.extras.creaper.core.online.ModelNodeResult socketBindingResult =
+        ModelNodeResult socketBindingResult =
             ops.readResource(socketBindingAddr);
         log.info("Worker outbound-socket-binding: {}", socketBindingResult.value());
 
@@ -78,33 +89,33 @@ public class DebugTest {
         log.info("Same network? {}", balancerNetworkId.equals(workerNetworkId));
 
         // Check balancer's Undertow subsystem configuration
-        org.wildfly.extras.creaper.core.online.OnlineManagementClient balancerClient =
-            org.wildfly.extras.creaper.core.ManagementClient.online(
-                org.wildfly.extras.creaper.core.online.OnlineOptions.standalone()
+        OnlineManagementClient balancerClient =
+            ManagementClient.online(
+                OnlineOptions.standalone()
                     .hostAndPort(cluster.getBalancer().getContainer().getHost(),
                                 cluster.getBalancer().getContainer().getMappedPort(9990))
                     .auth("admin", "admin")
                     .build()
             );
 
-        org.wildfly.extras.creaper.core.online.operations.Operations balancerOps =
-            new org.wildfly.extras.creaper.core.online.operations.Operations(balancerClient);
+        Operations balancerOps =
+            new Operations(balancerClient);
 
-        org.wildfly.extras.creaper.core.online.operations.Address filterAddr =
-            org.wildfly.extras.creaper.core.online.operations.Address.subsystem("undertow")
+        Address filterAddr =
+            Address.subsystem("undertow")
                 .and("configuration", "filter")
                 .and("mod-cluster", "modcluster");
 
-        org.wildfly.extras.creaper.core.online.ModelNodeResult filterConfig = balancerOps.readResource(filterAddr);
+        ModelNodeResult filterConfig = balancerOps.readResource(filterAddr);
         log.info("Balancer filter config: {}", filterConfig.value());
 
         // Check if any balancers/nodes are registered (following noe-tests pattern)
-        org.wildfly.extras.creaper.core.online.operations.Address modclusterFilterAddr2 =
-            org.wildfly.extras.creaper.core.online.operations.Address.subsystem("undertow")
+        Address modclusterFilterAddr2 =
+            Address.subsystem("undertow")
                 .and("configuration", "filter")
                 .and("mod-cluster", "modcluster");
 
-        org.wildfly.extras.creaper.core.online.ModelNodeResult balancersResult =
+        ModelNodeResult balancersResult =
             balancerOps.readChildrenNames(modclusterFilterAddr2, "balancer");
         log.info("Registered balancers: {}", balancersResult.value());
 
@@ -112,9 +123,9 @@ public class DebugTest {
         if (balancersResult.value().asList().size() > 0) {
             String balancerName = balancersResult.value().asList().get(0).asString();
             log.info("Checking balancer: {}", balancerName);
-            org.wildfly.extras.creaper.core.online.operations.Address balancerAddr =
+            Address balancerAddr =
                 modclusterFilterAddr2.and("balancer", balancerName);
-            org.wildfly.extras.creaper.core.online.ModelNodeResult nodesResult =
+            ModelNodeResult nodesResult =
                 balancerOps.readChildrenNames(balancerAddr, "node");
             log.info("Registered nodes in balancer '{}': {}", balancerName, nodesResult.value());
         }
