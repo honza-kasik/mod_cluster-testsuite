@@ -33,7 +33,7 @@ public class DynamicReconfTest {
         // Start with one worker
         cluster.startWorkers(1);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
         // Verify only worker1 receives traffic
         Map<String, Integer> initialDistribution = httpClient.testLoadDistribution(balancerUrl, 10);
@@ -77,36 +77,34 @@ public class DynamicReconfTest {
         cluster.startWorkers(1);
         WildFlyContainer worker = cluster.getWorker1();
 
-        // Read initial flush-packets setting
-        String initialValue = worker.executeCli(
-                "/subsystem=modcluster/proxy=default:read-attribute(name=flush-packets)");
+        // Read initial flush-packets setting using Creaper
+        org.jboss.dmr.ModelNode initialValue = worker.readModClusterAttribute("flush-packets");
 
-        log.info("Initial flush-packets: {}", initialValue);
+        log.info("Initial flush-packets: {}", initialValue.asBoolean());
 
-        // Change configuration dynamically
-        String writeResult = worker.executeCli(
-                "/subsystem=modcluster/proxy=default:write-attribute(name=flush-packets,value=true)");
+        boolean originalValue = initialValue.asBoolean();
 
-        softly.assertThat(writeResult)
-                .as("Configuration change should succeed")
-                .contains("outcome\" => \"success\"");
+        // Change configuration dynamically using Creaper
+        worker.writeModClusterAttribute("flush-packets", !originalValue);
 
         // Verify the change
-        String newValue = worker.executeCli(
-                "/subsystem=modcluster/proxy=default:read-attribute(name=flush-packets)");
+        org.jboss.dmr.ModelNode newValue = worker.readModClusterAttribute("flush-packets");
 
-        log.info("New flush-packets: {}", newValue);
+        log.info("New flush-packets: {}", newValue.asBoolean());
 
-        softly.assertThat(newValue)
+        softly.assertThat(newValue.asBoolean())
                 .as("Configuration should be updated")
-                .contains("\"result\" => true");
+                .isEqualTo(!originalValue);
+
+        // Restore original value
+        worker.writeModClusterAttribute("flush-packets", originalValue);
     }
 
     @Test
     public void testWorkerUnregistrationAndReregistration(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
         // Verify both workers active
         Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 20);
@@ -118,14 +116,17 @@ public class DynamicReconfTest {
         log.info("Stopping worker1...");
         cluster.getWorker1().stop();
 
-        // Wait for unregistration
-        await().atMost(ofSeconds(30))
-                .pollInterval(ofSeconds(2))
+        // Wait for unregistration (increased timeout for worker failure detection)
+        await().atMost(ofSeconds(60))
+                .pollInterval(ofSeconds(3))
                 .untilAsserted(() -> {
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 5);
+                    var dist = httpClient.testLoadDistribution(balancerUrl, 10);
                     softly.assertThat(dist)
                             .as("Only worker2 should receive traffic after worker1 stops")
                             .containsOnlyKeys("worker2");
+                    softly.assertThat(dist.get("worker2"))
+                            .as("worker2 should be receiving all successful requests")
+                            .isGreaterThan(0);
                 });
 
         log.info("Worker1 unregistered successfully");

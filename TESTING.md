@@ -14,15 +14,35 @@ Comprehensive guide for running mod_cluster tests with WildFly/EAP distributions
 ## Quick Start
 
 ```bash
-# 1. Setup (checks prerequisites)
-./setup.sh
-
-# 2. Place WildFly/EAP ZIP (optional but recommended)
+# 1. Place WildFly/EAP ZIP (optional but recommended)
 # The SAME ZIP is used for both workers and undertow balancer!
-cp ~/Downloads/wildfly-31.0.1.Final.zip distributions/
+cp ~/Downloads/wildfly-39.0.1.Final.zip distributions/
+
+# 2. Setup (checks prerequisites and builds images)
+./setup.sh
 
 # 3. Run tests
 mvn test
+```
+
+**What `./setup.sh` does**:
+- ✓ Checks Java, Maven, Docker/Podman
+- ✓ Finds ZIPs in `distributions/`
+- ✓ Builds Docker images from ZIPs (if not already built)
+- ✓ Shows summary of built/cached images
+
+**Output example**:
+```
+📦 wildfly-39.0.1.Final.zip (380M)
+  Required Java: openjdk-17
+  ⚙️  Building image (first time only)...
+  Building image: modcluster-test/wildfly-39-0-1-final:openjdk-17
+  This may take a few minutes...
+  ✓ Successfully built: modcluster-test/wildfly-39-0-1-final:openjdk-17
+
+Image Build Summary:
+  ✓ Cached (already existed): 0
+  ✓ Built successfully: 1
 ```
 
 **Note**: When you provide a ZIP, it's used for both:
@@ -116,7 +136,28 @@ export WILDFLY_ZIP_PATH=/opt/distributions/jboss-eap-8.0.0.zip
 mvn test
 ```
 
-### 4. Fallback Mode
+### 4. Override Java Version
+
+Force a specific Java version instead of auto-detection:
+
+```bash
+# Force Java 17
+mvn test -Dcontainer.java.version=17
+
+# Force Java 11
+mvn test -Dcontainer.java.version=11
+
+# Useful for custom builds
+mvn test -Dwildfly.zip.path=/path/to/custom-wildfly.zip -Dcontainer.java.version=17
+```
+
+**When to use**:
+- Custom WildFly builds
+- Non-standard ZIP file names
+- Testing compatibility with different Java versions
+- Troubleshooting Java version issues
+
+### 5. Fallback Mode
 
 No ZIP provided - uses pre-built images:
 

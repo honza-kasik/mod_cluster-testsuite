@@ -8,6 +8,7 @@ This test suite uses:
 - **JUnit 5** for test framework
 - **AssertJ** for soft assertions
 - **Testcontainers** for container-based testing
+- **Creaper** for WildFly/EAP management (clean, type-safe API)
 - **Dependency Injection** pattern (no abstract base classes)
 
 ## Project Structure
@@ -33,6 +34,17 @@ src/test/java/org/jboss/modcluster/test/
     └── HttpClient.java
 ```
 
+## ⚠️ Important: Example Tests
+
+The included tests are **EXAMPLES/TEMPLATES** to demonstrate testing patterns:
+
+- ✅ Show test structure and dependency injection
+- ✅ Include a demo WAR application for testing
+- ✅ Demonstrate mod_cluster test scenarios
+- ❌ Are NOT production tests for your specific application
+
+**Next steps**: Use these as templates to create tests for your own application. See [Test README](src/test/java/org/jboss/modcluster/test/README.md) for details on customizing tests.
+
 ## Running Tests
 
 ### Prerequisites
@@ -46,12 +58,23 @@ src/test/java/org/jboss/modcluster/test/
 
 1. **Place your WildFly/EAP ZIP in the distributions directory**:
    ```bash
-   cp ~/Downloads/wildfly-31.0.1.Final.zip distributions/
+   cp ~/Downloads/wildfly-39.0.1.Final.zip distributions/
    # or
    cp ~/Downloads/jboss-eap-8.0.0.zip distributions/
    ```
 
-2. **Run tests**:
+2. **Run setup (builds container images)**:
+   ```bash
+   ./setup.sh
+   ```
+
+   This will:
+   - ✓ Check prerequisites (Java, Maven, Docker)
+   - ✓ Detect ZIPs in `distributions/`
+   - ✓ Build Docker images (once, cached for future runs)
+   - ✓ Show build summary
+
+3. **Run tests**:
    ```bash
    mvn test
    ```
@@ -71,6 +94,20 @@ mvn test -Dwildfly.zip.path=/path/to/wildfly-31.0.1.Final.zip
 # Via environment variable
 export WILDFLY_ZIP_PATH=/path/to/jboss-eap-8.0.0.zip
 mvn test
+```
+
+### Override Java version
+
+```bash
+# During setup
+CONTAINER_JAVA_VERSION=17 ./setup.sh
+
+# During tests
+mvn test -Dcontainer.java.version=17
+
+# Or combine both
+CONTAINER_JAVA_VERSION=17 ./setup.sh
+mvn test -Dcontainer.java.version=17
 ```
 
 ### Run tests with httpd balancer
@@ -243,12 +280,19 @@ Based on the existing test matrix:
 **The same WildFly/EAP ZIP is used for both workers AND the Undertow balancer** - just with different configurations:
 
 1. Tests look for ZIP distributions in the `distributions/` directory
-2. If found, Testcontainers builds custom images on-the-fly:
-   - Uses Red Hat UBI9 with OpenJDK 11 as base
-   - Extracts the ZIP
+2. If found, builds Docker images using `docker build` (avoids Testcontainers large file limitations):
+   - Checks if image already exists (reuses if available)
+   - If not, runs `docker build` directly with the ZIP
+   - Uses Red Hat UBI9 with OpenJDK (version auto-detected based on WildFly/EAP version)
+     - **WildFly 31+ / EAP 8+**: Uses OpenJDK 17
+     - **WildFly 30 and earlier / EAP 7.x**: Uses OpenJDK 11
+   - Extracts the ZIP inside the image
+   - **Same image used for both workers and balancer** (configuration differs at runtime)
    - **For workers**: Starts with `standalone-ha.xml`, connects to balancer
    - **For Undertow balancer**: Starts with `standalone-ha.xml`, acts as load balancer (advertise enabled)
 3. If no ZIP is found, falls back to pre-built container images
+
+**Image naming**: `modcluster-test/wildfly-31-0-1-final:openjdk-17`
 
 ### Balancers
 - **Undertow balancer**:

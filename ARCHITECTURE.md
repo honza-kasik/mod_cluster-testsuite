@@ -255,6 +255,7 @@ Jenkins Pipeline
 |----------|---------|---------|
 | `wildfly.zip.path` | ZIP location | `/opt/wildfly-31.0.1.Final.zip` |
 | `wildfly.version` | Fallback version | `31.0.1.Final` |
+| `container.java.version` | Override Java version | `17` or `11` |
 | `balancer.type` | Balancer type | `undertow` or `httpd` |
 | `balancer.undertow.image` | Custom undertow | `my-registry.com/undertow:1.0` |
 | `balancer.httpd.image` | Custom httpd | `my-registry.com/httpd:2.4` |

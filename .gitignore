@@ -36,3 +36,4 @@ Thumbs.db
 # Distributions (ZIP files are large and user-specific)
 distributions/*.zip
 distributions/*.tar.gz
+distributions/Dockerfile.tmp

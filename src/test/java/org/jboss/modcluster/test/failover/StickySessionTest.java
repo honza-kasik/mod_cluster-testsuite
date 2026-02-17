@@ -29,7 +29,7 @@ public class StickySessionTest {
         // Start two workers
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
         // Make initial request to establish session
         HttpResponse initialResponse = httpClient.get(balancerUrl);
@@ -69,7 +69,7 @@ public class StickySessionTest {
     public void testSessionAffinityWithMultipleClients(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
         // Simulate 5 different clients with different sessions
         for (int client = 1; client <= 5; client++) {

@@ -6,6 +6,8 @@ pipeline {
                description: 'WildFly version to test (used for pre-built images)')
         string(name: 'WILDFLY_ZIP_PATH', defaultValue: '',
                description: 'Path to WildFly/EAP ZIP distribution (optional, will build from ZIP if provided)')
+        choice(name: 'JAVA_VERSION', choices: ['auto', '17', '11'],
+               description: 'Java version for containers (auto = auto-detect based on WildFly version)')
     }
 
     options {
@@ -49,12 +51,14 @@ pipeline {
                                 echo "Running tests with balancer: ${balancerType}"
 
                                 def zipPathParam = params.WILDFLY_ZIP_PATH ? "-Dwildfly.zip.path=${params.WILDFLY_ZIP_PATH}" : ""
+                                def javaVersionParam = params.JAVA_VERSION != 'auto' ? "-Dcontainer.java.version=${params.JAVA_VERSION}" : ""
 
                                 sh """
                                     mvn test -P${balancerType} \\
                                         -Dbalancer.type=${balancerType} \\
                                         -Dwildfly.version=${params.WILDFLY_VERSION} \\
                                         ${zipPathParam} \\
+                                        ${javaVersionParam} \\
                                         -Dtestcontainers.reuse.enable=false
                                 """
                             }

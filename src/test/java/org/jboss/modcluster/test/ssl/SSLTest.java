@@ -27,7 +27,7 @@ public class SSLTest {
     public void testHttpsConnectionToBalancer(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(1);
 
-        String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/demo";
+        String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/demo/";
 
         HttpResponse response = httpClient.getHttps(httpsUrl);
 
@@ -42,7 +42,7 @@ public class SSLTest {
     public void testHttpsWithMultipleWorkers(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/demo";
+        String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/demo/";
 
         // Make multiple HTTPS requests
         for (int i = 0; i < 10; i++) {
@@ -60,7 +60,7 @@ public class SSLTest {
     public void testSslSessionPersistence(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/demo";
+        String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/demo/";
 
         // First HTTPS request to establish session
         HttpResponse initialResponse = httpClient.getHttps(httpsUrl);

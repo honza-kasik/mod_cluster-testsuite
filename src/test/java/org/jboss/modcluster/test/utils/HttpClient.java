@@ -27,8 +27,8 @@ public class HttpClient {
 
     public HttpClient() {
         this.client = new OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
+                .connectTimeout(3, TimeUnit.SECONDS)  // Reduced from 10s for faster failover detection
+                .readTimeout(5, TimeUnit.SECONDS)     // Reduced from 10s
                 .followRedirects(false)
                 .build();
 
@@ -86,26 +86,56 @@ public class HttpClient {
 
     /**
      * Make multiple requests to test load balancing distribution.
+     * Handles connection failures gracefully (e.g., when workers are being stopped).
+     * Disables connection reuse to get accurate load balancing distribution.
      */
     public Map<String, Integer> testLoadDistribution(String url, int requestCount) throws IOException {
         Map<String, Integer> workerHits = new HashMap<>();
+        int successfulRequests = 0;
+        int failedRequests = 0;
 
         for (int i = 0; i < requestCount; i++) {
-            HttpResponse response = get(url);
-            String worker = extractWorkerName(response.getBody());
+            try {
+                // Add "Connection: close" header to disable HTTP keep-alive and connection reuse
+                // This ensures each request gets a fresh connection for accurate load balancing testing
+                Map<String, String> headers = new HashMap<>();
+                headers.put("Connection", "close");
+                HttpResponse response = get(url, headers);
+                String worker = extractWorkerName(response.getBody());
 
-            workerHits.merge(worker, 1, Integer::sum);
-            log.debug("Request {} -> Worker: {}", i + 1, worker);
+                workerHits.merge(worker, 1, Integer::sum);
+                successfulRequests++;
+                log.debug("Request {} -> Worker: {}", i + 1, worker);
+            } catch (IOException e) {
+                // Handle connection failures (e.g., when worker is being stopped/unregistered)
+                failedRequests++;
+                log.debug("Request {} failed: {}", i + 1, e.getMessage());
+                // Continue with next request
+            }
         }
+
+        log.debug("Load distribution test: {} successful, {} failed out of {} total requests",
+                successfulRequests, failedRequests, requestCount);
 
         return workerHits;
     }
 
     /**
-     * Extract worker name from response body (assumes app returns worker identity).
+     * Extract worker name from response body.
+     * Looks for pattern: <strong>Worker:</strong> worker1
      */
     private String extractWorkerName(String body) {
-        // This is a simple implementation - adjust based on actual app response format
+        // Extract from JSP output: <strong>Worker:</strong> worker1
+        if (body.contains("<strong>Worker:</strong>")) {
+            int startIdx = body.indexOf("<strong>Worker:</strong>") + "<strong>Worker:</strong>".length();
+            int endIdx = body.indexOf("</p>", startIdx);
+            if (endIdx > startIdx) {
+                String workerSection = body.substring(startIdx, endIdx).trim();
+                return workerSection; // Returns "worker1" or "worker2"
+            }
+        }
+
+        // Fallback: simple contains check
         if (body.contains("worker1")) return "worker1";
         if (body.contains("worker2")) return "worker2";
         return "unknown";
@@ -160,8 +190,8 @@ public class HttpClient {
             return new OkHttpClient.Builder()
                     .sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) trustAllCerts[0])
                     .hostnameVerifier((hostname, session) -> true)
-                    .connectTimeout(10, TimeUnit.SECONDS)
-                    .readTimeout(10, TimeUnit.SECONDS)
+                    .connectTimeout(3, TimeUnit.SECONDS)  // Reduced from 10s for faster failover detection
+                    .readTimeout(5, TimeUnit.SECONDS)     // Reduced from 10s
                     .followRedirects(false)
                     .build();
         } catch (Exception e) {

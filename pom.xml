@@ -80,7 +80,23 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- WildFly Client -->
+        <!-- Creaper - WildFly/EAP Management -->
+        <dependency>
+            <groupId>org.wildfly.extras.creaper</groupId>
+            <artifactId>creaper-core</artifactId>
+            <version>2.0.3</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.wildfly.extras.creaper</groupId>
+            <artifactId>creaper-commands</artifactId>
+            <version>2.0.3</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- WildFly Core - Required by Creaper for management operations -->
+        <!-- Using 23.x for compatibility with WildFly 31.x -->
         <dependency>
             <groupId>org.wildfly.core</groupId>
             <artifactId>wildfly-controller-client</artifactId>
@@ -92,6 +108,14 @@
             <groupId>org.wildfly.core</groupId>
             <artifactId>wildfly-cli</artifactId>
             <version>23.0.3.Final</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- JBoss Logging - Ensure compatible version -->
+        <dependency>
+            <groupId>org.jboss.logging</groupId>
+            <artifactId>jboss-logging</artifactId>
+            <version>3.5.0.Final</version>
             <scope>test</scope>
         </dependency>
 
@@ -161,6 +185,8 @@
                     <systemPropertyVariables>
                         <balancer.type>${balancer.type}</balancer.type>
                         <wildfly.version>${wildfly.version}</wildfly.version>
+                        <!-- Optional: Override Java version (11 or 17), auto-detected by default -->
+                        <container.java.version>${container.java.version}</container.java.version>
                     </systemPropertyVariables>
                     <includes>
                         <include>**/*Test.java</include>
