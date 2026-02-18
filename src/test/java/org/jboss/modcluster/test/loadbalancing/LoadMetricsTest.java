@@ -19,6 +19,8 @@ import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 /**
  * Tests for load calculation and metrics in mod_cluster.
  * Verifies load factor calculation, custom metrics, load-based routing, and dynamic load adjustment.
@@ -127,69 +129,17 @@ public class LoadMetricsTest {
         worker1.writeLoadValue(500, loadFilePath);
         worker2.writeLoadValue(500, loadFilePath);
 
-        // Configure custom load metric (module is pre-baked in image, no reload needed)
-        log.info("Configuring custom load metric (weight=10 for priority)...");
-        try {
-            worker1.configureCustomLoadMetric(loadFilePath, 1000, 10);
-            log.info("Worker1 custom metric configured successfully");
-        } catch (Exception e) {
-            log.error("Failed to configure worker1 custom metric: {}", e.getMessage());
-            log.error("Worker1 server log:\n{}", worker1.getServerLog(50));
-            throw e;
-        }
-
-        try {
-            worker2.configureCustomLoadMetric(loadFilePath, 1000, 10);
-            log.info("Worker2 custom metric configured successfully");
-        } catch (Exception e) {
-            log.error("Failed to configure worker2 custom metric: {}", e.getMessage());
-            log.error("Worker2 server log:\n{}", worker2.getServerLog(50));
-            throw e;
-        }
-
-        // Check server logs for custom metric class loading
-        log.info("Checking server logs for custom metric loading...");
-        String w1Logs = worker1.grepServerLog("FileBasedLoadMetric\\|modcluster.test.metric\\|ClassNotFoundException");
-        String w2Logs = worker2.grepServerLog("FileBasedLoadMetric\\|modcluster.test.metric\\|ClassNotFoundException");
-
-        if (w1Logs.contains("No matches found")) {
-            log.warn("Worker1: No FileBasedLoadMetric mentions in server log (class may not be loaded)");
-        } else {
-            log.info("Worker1 log matches: {}", w1Logs.replace("\n", " | "));
-        }
-
-        if (w2Logs.contains("No matches found")) {
-            log.warn("Worker2: No FileBasedLoadMetric mentions in server log (class may not be loaded)");
-        } else {
-            log.info("Worker2 log matches: {}", w2Logs.replace("\n", " | "));
-        }
-
-        // Print full server logs for inspection
-        log.info("========== WORKER1 FULL SERVER LOG ==========");
-        String w1FullLog = worker1.getServerLog();
-        System.out.println(w1FullLog);
-        log.info("========== END WORKER1 LOG ==========");
-
-        log.info("========== WORKER2 FULL SERVER LOG ==========");
-        String w2FullLog = worker2.getServerLog();
-        System.out.println(w2FullLog);
-        log.info("========== END WORKER2 LOG ==========");
+        // Configure custom load metric (will trigger restart)
+        // Use weight=1 like noe-tests (with no other metrics, weight doesn't matter)
+        log.info("Configuring custom load metric (weight=1 matching noe-tests)...");
+        worker1.configureCustomLoadMetric(loadFilePath, 1000, 1);
+        worker2.configureCustomLoadMetric(loadFilePath, 1000, 1);
 
         // Verify custom metric is configured in subsystem
         verifyCustomMetricConfigured(worker1, worker2);
 
-        // Check if mod_cluster subsystem shows any errors
-        log.info("Checking mod_cluster subsystem status...");
-        String w1ModClusterLog = worker1.grepServerLog("MODCLUSTER\\|mod_cluster");
-        String w2ModClusterLog = worker2.grepServerLog("MODCLUSTER\\|mod_cluster");
-
-        log.info("Worker1 mod_cluster log entries: {}",
-            w1ModClusterLog.lines().limit(10).collect(java.util.stream.Collectors.joining(" | ")));
-        log.info("Worker2 mod_cluster log entries: {}",
-            w2ModClusterLog.lines().limit(10).collect(java.util.stream.Collectors.joining(" | ")));
-
-        // Wait a bit for configuration to take effect
-        log.info("Waiting for custom metric to be picked up...");
+        // Wait a bit for everything to stabilize
+        log.info("Waiting for system to stabilize...");
         Thread.sleep(5000);
 
         // SCENARIO 1: High load on worker1, low load on worker2
@@ -197,9 +147,14 @@ public class LoadMetricsTest {
         worker1.writeLoadValue(900, loadFilePath);
         worker2.writeLoadValue(100, loadFilePath);
 
-        Thread.sleep(20000); // Wait for load propagation (2x status-interval)
+        // Wait for balancer to receive STATUS messages with correct load values
+        // Expected load = (1000 - fileValue) / 10 (following noe-tests formula)
+        // worker1: (1000 - 900) / 10 = 10
+        // worker2: (1000 - 100) / 10 = 90
+        log.info("Waiting for balancer to report expected loads (worker1=10, worker2=90)...");
+        waitForExpectedLoads(cluster, "worker1", 10, "worker2", 90, 60);
 
-        Map<String, Integer> scenario1 = httpClient.testLoadDistribution(balancerUrl, 200);
+        Map<String, Integer> scenario1 = httpClient.testLoadDistribution(balancerUrl, 500);
         log.info("Scenario 1 distribution (900/100): {}", scenario1);
 
         int s1_w1 = scenario1.getOrDefault("worker1", 0);
@@ -214,9 +169,13 @@ public class LoadMetricsTest {
         worker1.writeLoadValue(100, loadFilePath);
         worker2.writeLoadValue(900, loadFilePath);
 
-        Thread.sleep(20000); // Wait for load propagation
+        // Wait for balancer to receive STATUS messages with correct load values
+        // worker1: (1000 - 100) / 10 = 90
+        // worker2: (1000 - 900) / 10 = 10
+        log.info("Waiting for balancer to report expected loads (worker1=90, worker2=10)...");
+        waitForExpectedLoads(cluster, "worker1", 90, "worker2", 10, 60);
 
-        Map<String, Integer> scenario2 = httpClient.testLoadDistribution(balancerUrl, 200);
+        Map<String, Integer> scenario2 = httpClient.testLoadDistribution(balancerUrl, 500);
         log.info("Scenario 2 distribution (100/900): {}", scenario2);
 
         int s2_w1 = scenario2.getOrDefault("worker1", 0);
@@ -231,40 +190,77 @@ public class LoadMetricsTest {
         log.info("  Scenario 2 (W1=100, W2=900): worker1={}, worker2={}", s2_w1, s2_w2);
     }
 
-    private Map<String, Integer> pollForWorkerRegistration(HttpClient httpClient, String balancerUrl, int maxSeconds)
-            throws Exception {
-        Map<String, Integer> result = new java.util.HashMap<>();
-        for (int i = 0; i < maxSeconds; i += 2) {
-            try {
-                result = httpClient.testLoadDistribution(balancerUrl, 10);
-                if (result.size() >= 2) {
-                    log.info("Both workers registered: {}", result.keySet());
-                    Thread.sleep(3000); // Extra stabilization
-                    return result;
-                }
-                log.info("Waiting for workers... registered: {}", result.keySet());
-            } catch (Exception e) {
-                log.debug("Balancer not ready: {}", e.getMessage());
-            }
-            Thread.sleep(2000);
-        }
-        return result;
-    }
-
     private void verifyCustomMetricConfigured(WildFlyContainer worker1, WildFlyContainer worker2)
             throws Exception {
+        // mod_cluster uses the full class name as the key, not the custom name we specify
         Address metricAddr = Address.subsystem("modcluster").and("proxy", "default")
                 .and("load-provider", "dynamic")
-                .and("custom-load-metric", "file-based");
+                .and("custom-load-metric", "org.jboss.modcluster.test.metric.FileBasedLoadMetric");
+
+        log.info("Worker1 load-provider config: {}",
+                worker1.getOperations().readResource(Address.subsystem("modcluster").and("proxy", "default")
+                        .and("load-provider", "dynamic"), ReadResourceOption.RECURSIVE).stringValue());
 
         boolean w1HasMetric = worker1.getOperations().exists(metricAddr);
         boolean w2HasMetric = worker2.getOperations().exists(metricAddr);
 
         log.info("Custom metric configured: worker1={}, worker2={}", w1HasMetric, w2HasMetric);
 
-        softly.assertThat(w1HasMetric && w2HasMetric)
+        assertThat(w1HasMetric && w2HasMetric)
                 .as("Both workers should have custom metric configured")
                 .isTrue();
+    }
+
+    /**
+     * Wait for the balancer to report expected load values for workers.
+     * Polls the balancer until loads match expected values or timeout.
+     * Following noe-tests approach: load = (1000 - fileValue) / 10
+     */
+    private void waitForExpectedLoads(ModClusterTestExtension.TestCluster cluster,
+                                      String worker1Name, int expectedLoad1,
+                                      String worker2Name, int expectedLoad2,
+                                      int timeoutSeconds) throws Exception {
+        long startTime = System.currentTimeMillis();
+        long timeoutMillis = timeoutSeconds * 1000L;
+        boolean worker1Found = false;
+        boolean worker2Found = false;
+
+        while (System.currentTimeMillis() - startTime < timeoutMillis) {
+            try {
+                Map<String, ModelNode> workers = cluster.getBalancer().getWorkerInfo();
+
+                if (workers.containsKey(worker1Name)) {
+                    int actualLoad1 = workers.get(worker1Name).get("load").asInt();
+                    if (actualLoad1 == expectedLoad1) {
+                        worker1Found = true;
+                        log.info("{} reached expected load: {}", worker1Name, expectedLoad1);
+                    } else {
+                        log.info("{} current load: {} (expected: {})", worker1Name, actualLoad1, expectedLoad1);
+                    }
+                }
+
+                if (workers.containsKey(worker2Name)) {
+                    int actualLoad2 = workers.get(worker2Name).get("load").asInt();
+                    if (actualLoad2 == expectedLoad2) {
+                        worker2Found = true;
+                        log.info("{} reached expected load: {}", worker2Name, expectedLoad2);
+                    } else {
+                        log.info("{} current load: {} (expected: {})", worker2Name, actualLoad2, expectedLoad2);
+                    }
+                }
+
+                if (worker1Found && worker2Found) {
+                    log.info("Both workers reporting expected loads");
+                    return;
+                }
+            } catch (Exception e) {
+                log.debug("Error checking loads: {}", e.getMessage());
+            }
+
+            Thread.sleep(2000); // Poll every 2 seconds
+        }
+
+        softly.fail("Balancer didn't report expected loads. This means load never propagated.");
     }
 
     /**

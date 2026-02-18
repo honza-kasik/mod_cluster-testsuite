@@ -12,6 +12,8 @@ import org.wildfly.extras.creaper.core.online.OnlineOptions;
 import org.wildfly.extras.creaper.core.online.operations.Address;
 import org.wildfly.extras.creaper.core.online.operations.OperationException;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
+import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
+import org.wildfly.extras.creaper.core.online.operations.Values;
 import org.wildfly.extras.creaper.core.online.operations.admin.Administration;
 import org.wildfly.extras.creaper.commands.deployments.Deploy;
 import org.wildfly.extras.creaper.commands.deployments.Undeploy;
@@ -21,7 +23,6 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Container wrapper for WildFly/EAP workers with mod_cluster subsystem.
@@ -108,7 +109,7 @@ public class WildFlyContainer {
                 .waitingFor(Wait.forLogMessage(".*WFLYSRV0025.*", 1)
                         .withStartupTimeout(Duration.ofMinutes(5)))
                 .withLogConsumer(outputFrame ->
-                        log.debug("[{}] {}", name.toUpperCase(), outputFrame.getUtf8String().trim()));
+                        System.out.println("[" + name.toUpperCase() + "] " + outputFrame.getUtf8String().trim()));
 
         container.start();
         log.info("WildFly worker '{}' started", name);
@@ -308,6 +309,37 @@ public class WildFlyContainer {
         if (container != null && container.isRunning()) {
             container.stop();
             log.info("WildFly worker '{}' stopped", name);
+        }
+    }
+
+    /**
+     * Hard kill the worker (simulates crash/SIGKILL).
+     * Kills the container immediately without graceful shutdown.
+     */
+    public void kill() {
+        // Close management client
+        if (managementClient != null) {
+            try {
+                managementClient.close();
+            } catch (IOException e) {
+                log.warn("Error closing management client for worker '{}'", name, e);
+            }
+            managementClient = null;
+        }
+
+        // Kill container using SIGKILL
+        if (container != null && container.isRunning()) {
+            try {
+                container.getDockerClient()
+                        .killContainerCmd(container.getContainerId())
+                        .withSignal("KILL")
+                        .exec();
+                log.info("WildFly worker '{}' killed (hard stop)", name);
+            } catch (Exception e) {
+                log.warn("Error killing worker '{}': {}", name, e.getMessage());
+                // Fallback to regular stop
+                container.stop();
+            }
         }
     }
 
@@ -597,89 +629,76 @@ public class WildFlyContainer {
 
         Operations ops = getOperations();
 
-        // Build the custom-load-metric address
-        Address metricAddress = Address.subsystem("modcluster")
-                .and("proxy", "default")
-                .and("load-provider", "dynamic")
-                .and("custom-load-metric", "file-based");
+        Address dynamicProviderAddr = Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "dynamic");
 
-        // Build properties for the custom load metric
+        // FIRST: Set history=0 and decay=0 for immediate load reflection (BEFORE adding custom metric)
+        log.info("Setting history=0 and decay=0 for immediate load reflection");
+        ops.writeAttribute(dynamicProviderAddr, "history", 0).assertSuccess();
+        ops.writeAttribute(dynamicProviderAddr, "decay", 0).assertSuccess();
+
+        // SECOND: Remove CPU metric (following noe-tests approach: only custom metric, no built-in metrics)
+        log.info("Removing all built-in load metrics to use only custom metric");
+        Address cpuMetricAddr = dynamicProviderAddr.and("load-metric", "cpu");
+        ops.remove(cpuMetricAddr).assertSuccess();
+
+        // THIRD: Add the custom load metric
+        Address metricAddress = dynamicProviderAddr.and("custom-load-metric", "file-based");
+
+        // Build properties for the custom load metric (lowercase names to match setters)
         ModelNode properties = new ModelNode();
-        properties.get("loadFile").set(loadFilePath);
-        properties.get("parseExpression").set("^LOAD: ([0-9]+)$");
+        properties.get("loadfile").set(loadFilePath);
+        properties.get("parseexpression").set("^LOAD: ([0-9]+)$");
 
         // Add the custom load metric using Creaper Operations
         ModelNodeResult result = ops.add(metricAddress,
-                org.wildfly.extras.creaper.core.online.operations.Values.empty()
+                Values.empty()
                         .and("class", "org.jboss.modcluster.test.metric.FileBasedLoadMetric")
                         .and("module", "org.jboss.modcluster.test.metric")
                         .and("capacity", capacity)
                         .and("weight", weight)
                         .and("property", properties));
-
         result.assertSuccess();
+
+        ops.removeIfExists(Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "simple"));
+
 
         log.info("Custom load metric added to configuration, restarting server to load module...");
 
         getAdministration().restart();
-
-        managementClient = null;
 
         log.info("Server restart initiated, waiting for server to come back up...");
 
         // Wait for server to restart and management interface to be ready
         waitForManagementReady();
 
-        // Reconfigure static proxy and redeploy demo after restart
-        configureStaticProxy();
-        deployDemoApp();
+        // Verify final configuration from management model
+        ops = getOperations();
+        ModelNodeResult finalConfig = ops.readResource(
+            Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "dynamic"),
+            ReadResourceOption.INCLUDE_RUNTIME, ReadResourceOption.RECURSIVE);
+        log.info("Final load-provider configuration after restart (from management): {}", finalConfig.value().toJSONString(true));
+
+        // Also read the actual XML configuration file to see what's persisted
+        try {
+            org.testcontainers.containers.Container.ExecResult xmlResult = container.execInContainer(
+                "cat", "/opt/wildfly/standalone/configuration/standalone-ha.xml"
+            );
+
+            // Extract just the mod_cluster subsystem section
+            String fullXml = xmlResult.getStdout();
+            int modclusterStart = fullXml.indexOf("<subsystem xmlns=\"urn:jboss:domain:modcluster:");
+            if (modclusterStart != -1) {
+                int modclusterEnd = fullXml.indexOf("</subsystem>", modclusterStart);
+                if (modclusterEnd != -1) {
+                    String modclusterXml = fullXml.substring(modclusterStart, modclusterEnd + 12);
+                    log.info("Mod_cluster subsystem in standalone-ha.xml:\n{}", modclusterXml);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not read standalone-ha.xml: {}", e.getMessage());
+        }
 
         log.info("Custom load metric activated on worker '{}'", name);
-    }
-
-    /**
-     * Restart the container (stop and start) to apply configuration changes.
-     * Reconfigures static proxy, redeploys custom load metric module, and redeploys demo app after restart.
-     */
-    public void restart() throws Exception {
-        log.info("Restarting worker '{}'", name);
-
-        // Remember if custom load metric was deployed
-        File customMetricJar = new File("src/test/resources/custom-load-metric/target/custom-load-metric.jar");
-        boolean hasCustomMetric = customMetricJar.exists();
-
-        // Close management client before stopping
-        if (managementClient != null) {
-            try {
-                managementClient.close();
-            } catch (IOException e) {
-                log.warn("Error closing management client for restart", e);
-            }
-            managementClient = null;
-        }
-
-        // Stop and start container
-        container.stop();
-        container.start();
-
-        log.info("Worker '{}' restarted, waiting for server startup...", name);
-
-        // Wait for management interface to be ready (poll instead of sleep)
-        waitForManagementReady();
-
-        // Redeploy custom load metric if it was deployed before restart
-        if (hasCustomMetric) {
-            log.info("Redeploying custom load metric module after restart...");
-            deployCustomLoadMetric();
-        }
-
-        // Reconfigure static proxy connection
-        configureStaticProxy();
-
-        // Redeploy demo application
-        deployDemoApp();
-
-        log.info("Worker '{}' restart complete", name);
     }
 
     /**
@@ -704,62 +723,6 @@ public class WildFlyContainer {
             Thread.sleep(1000);
         }
         throw new RuntimeException("Management interface not ready after " + maxAttempts + " seconds");
-    }
-
-    /**
-     * Wait for worker to fully register with the balancer after startup.
-     */
-    public void waitForBalancerRegistration(String balancerUrl, int timeoutSeconds) throws Exception {
-        log.info("Waiting for worker '{}' to register with balancer...", name);
-
-        long startTime = System.currentTimeMillis();
-        long timeoutMillis = timeoutSeconds * 1000L;
-
-        while (System.currentTimeMillis() - startTime < timeoutMillis) {
-            try {
-                // Try to make a request through the balancer
-                String testUrl = balancerUrl;
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(testUrl).openConnection();
-                conn.setRequestMethod("GET");
-                conn.setConnectTimeout(2000);
-                conn.setReadTimeout(2000);
-
-                int responseCode = conn.getResponseCode();
-                if (responseCode == 200) {
-                    // Read response to check which worker served it
-                    java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(conn.getInputStream()));
-                    StringBuilder response = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        response.append(line);
-                    }
-                    reader.close();
-
-                    // Check if any worker is serving (both should eventually register)
-                    if (response.toString().contains("Served by")) {
-                        log.info("Worker registered - balancer is routing traffic");
-                        Thread.sleep(2000); // Extra time for full registration
-                        return;
-                    }
-                }
-                conn.disconnect();
-            } catch (Exception e) {
-                // Not ready yet, continue waiting
-            }
-            Thread.sleep(1000);
-        }
-
-        log.warn("Worker '{}' may not be fully registered after {} seconds", name, timeoutSeconds);
-    }
-
-    /**
-     * Write load value to the container for custom load metric testing.
-     *
-     * @param loadValue The load value to write (will be normalized by capacity)
-     */
-    public void writeLoadValue(int loadValue) throws Exception {
-        writeLoadValue(loadValue, "/tmp/modcluster-load.txt");
     }
 
     /**

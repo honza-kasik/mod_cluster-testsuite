@@ -26,6 +26,14 @@
             <version>2.1.0.Final</version>
             <scope>provided</scope>
         </dependency>
+
+        <!-- JBoss Logging for proper WildFly logging -->
+        <dependency>
+            <groupId>org.jboss.logging</groupId>
+            <artifactId>jboss-logging</artifactId>
+            <version>3.4.1.Final</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <build>

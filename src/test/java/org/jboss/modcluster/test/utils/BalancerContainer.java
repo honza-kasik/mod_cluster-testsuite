@@ -19,6 +19,7 @@ import java.io.File;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.List;
 
 /**
  * Container wrapper for load balancers (Undertow or httpd with mod_cluster).
@@ -82,6 +83,12 @@ public abstract class BalancerContainer {
     public BalancerType getType() {
         return type;
     }
+
+    /**
+     * Get worker/node information from the balancer.
+     * Returns a map of worker names to their runtime information including load.
+     */
+    public abstract java.util.Map<String, org.jboss.dmr.ModelNode> getWorkerInfo() throws Exception;
 
     /**
      * Undertow-based mod_cluster balancer.
@@ -212,9 +219,12 @@ public abstract class BalancerContainer {
 
                 ops.add(filterAddr,
                     Values.of("management-socket-binding", "modcluster-mcmp")
-                        .and("advertise-socket-binding", "modcluster"))
+                        .and("advertise-socket-binding", "modcluster")
+                        .and("health-check-interval", 5)  // Check worker health every 5 seconds
+                        .and("broken-node-timeout", 10)   // Mark as down after 10 seconds of no response
+                        .and("failover-strategy", "LOAD_BALANCED"))  // Failover to least loaded node
                     .assertSuccess("Failed to add mod_cluster filter");
-                log.info("Mod_cluster filter created");
+                log.info("Mod_cluster filter created with health checks and failover enabled");
 
                 // Step 4: Add filter-ref to default-host (following CLILib order)
                 Address filterRefAddr =
@@ -239,6 +249,52 @@ public abstract class BalancerContainer {
                 log.error("Failed to configure balancer", e);
                 throw new RuntimeException("Balancer configuration failed", e);
             }
+        }
+
+        @Override
+        public java.util.Map<String, org.jboss.dmr.ModelNode> getWorkerInfo() throws Exception {
+            java.util.Map<String, org.jboss.dmr.ModelNode> workerInfo = new java.util.HashMap<>();
+
+            OnlineManagementClient client = ManagementClient.online(
+                OnlineOptions.standalone()
+                    .hostAndPort(container.getHost(), container.getMappedPort(MANAGEMENT_PORT))
+                    .auth("admin", "admin")
+                    .build()
+            );
+
+            Operations ops = new Operations(client);
+
+            // Address to mod_cluster filter
+            Address filterAddr = Address.subsystem("undertow")
+                .and("configuration", "filter")
+                .and("mod-cluster", "modcluster");
+
+            // Get list of balancers
+            List<String> balancers = ops.readChildrenNames(filterAddr, "balancer").stringListValue();
+            log.debug("Balancers: {}", balancers);
+
+            // For each balancer, get its nodes (workers)
+            for (String balancerName : balancers) {
+                Address balancerAddr = filterAddr.and("balancer", balancerName);
+                List<String> nodes = ops.readChildrenNames(balancerAddr, "node").stringListValue();
+                log.debug("Balancer '{}' has nodes: {}", balancerName, nodes);
+
+                // For each node, read its runtime info
+                for (String nodeName : nodes) {
+                    Address nodeAddr = balancerAddr.and("node", nodeName);
+                    org.wildfly.extras.creaper.core.online.ModelNodeResult result =
+                        ops.readResource(nodeAddr, org.wildfly.extras.creaper.core.online.operations.ReadResourceOption.INCLUDE_RUNTIME);
+
+                    if (result.isSuccess()) {
+                        org.jboss.dmr.ModelNode nodeInfo = result.value();
+                        workerInfo.put(nodeName, nodeInfo);
+                        log.debug("Node '{}' info: {}", nodeName, nodeInfo.toJSONString(false));
+                    }
+                }
+            }
+
+            client.close();
+            return workerInfo;
         }
 
         private void startFromImage() {
@@ -347,6 +403,11 @@ public abstract class BalancerContainer {
 
             container.start();
             log.info("Httpd balancer started on network: {}", network.getId());
+        }
+
+        @Override
+        public java.util.Map<String, org.jboss.dmr.ModelNode> getWorkerInfo() throws Exception {
+            throw new UnsupportedOperationException("Worker info querying not yet implemented for httpd balancer. Use mod_cluster_manager web interface instead.");
         }
     }
 }

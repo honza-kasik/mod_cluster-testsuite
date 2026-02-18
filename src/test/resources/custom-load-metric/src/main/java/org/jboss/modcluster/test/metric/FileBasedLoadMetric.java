@@ -1,11 +1,14 @@
 package org.jboss.modcluster.test.metric;
 
+import org.jboss.logging.Logger;
 import org.jboss.modcluster.container.Engine;
-import org.jboss.modcluster.load.metric.LoadMetric;
+import org.jboss.modcluster.load.metric.impl.AbstractLoadMetric;
 
 import java.io.File;
-import java.io.IOException;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.nio.file.Files;
+import java.util.Scanner;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -14,82 +17,79 @@ import java.util.regex.Pattern;
  * This allows external control of reported load for testing purposes.
  *
  * The load file should contain a line matching the pattern: LOAD: <number>
- * For example: "LOAD: 75" reports a load of 75.
+ * For example: "LOAD: 900" reports a load of 900.
+ *
+ * Following noe-tests implementation:
+ * - Extends AbstractLoadMetric (handles capacity normalization internally)
+ * - Returns raw load values (not pre-normalized)
+ * - Uses lowercase property names matching JavaBean conventions
  */
-public class FileBasedLoadMetric implements LoadMetric {
+public class FileBasedLoadMetric extends AbstractLoadMetric {
 
-    private String loadFilePath = "/tmp/modcluster-load.txt";
-    private String parseExpression = "^LOAD: ([0-9]+)$";
+    private static final Logger log = Logger.getLogger(FileBasedLoadMetric.class);
+
+    private String loadfile = "/tmp/modcluster-load.txt";
     private Pattern pattern;
-    private double capacity = 1000.0;
-    private int weight = 1;
 
     public FileBasedLoadMetric() {
-        this.pattern = Pattern.compile(parseExpression);
+        this.pattern = Pattern.compile("^LOAD: ([0-9]+)$");
+        log.info("***** FileBasedLoadMetric Constructor called *****");
     }
 
     /**
      * Set the path to the file containing load information.
+     * Property name: "loadfile" (lowercase to match noe-tests)
      */
-    public void setLoadFile(String loadFilePath) {
-        this.loadFilePath = loadFilePath;
+    public void setLoadfile(String loadfile) {
+        this.loadfile = loadfile;
+        log.info("***** setLoadfile: " + loadfile + " *****");
     }
 
     /**
      * Set the regex pattern for parsing the load value from file.
+     * Property name: "parseexpression" (lowercase to match noe-tests)
      */
-    public void setParseExpression(String parseExpression) {
-        this.parseExpression = parseExpression;
-        this.pattern = Pattern.compile(parseExpression);
-    }
-
-    /**
-     * Set the capacity (maximum load value).
-     */
-    public void setCapacity(double capacity) {
-        this.capacity = capacity;
+    public void setParseexpression(String parseexpression) {
+        try {
+            this.pattern = Pattern.compile(parseexpression);
+            log.info("***** setParseexpression: " + parseexpression + " *****");
+        } catch (Exception e) {
+            log.error("***** Invalid regex pattern: " + parseexpression + " *****", e);
+        }
     }
 
     @Override
     public double getLoad(Engine engine) throws Exception {
-        File loadFile = new File(loadFilePath);
-
-        if (!loadFile.exists()) {
-            // Return 0 if file doesn't exist (no artificial load)
-            return 0.0;
-        }
-
+        Scanner scanner = null;
         try {
-            String content = new String(Files.readAllBytes(loadFile.toPath()));
-            Matcher matcher = pattern.matcher(content.trim());
+            scanner = new Scanner(new FileInputStream(loadfile), "UTF-8");
+            log.info("***** getLoad() called for file: " + loadfile + " *****");
 
-            if (matcher.find() && matcher.groupCount() >= 1) {
-                String loadStr = matcher.group(1);
-                double load = Double.parseDouble(loadStr);
+            while (scanner.hasNextLine()) {
+                String line = scanner.nextLine();
+                Matcher matcher = pattern.matcher(line);
 
-                // Normalize to 0-1 range based on capacity
-                return Math.min(load / capacity, 1.0);
+                if (matcher.matches() && matcher.group(1) != null) {
+                    String loadStr = matcher.group(1);
+                    double load = Double.parseDouble(loadStr);
+
+                    log.info("***** Parsed raw load value: " + load + " from file: " + loadfile + " *****");
+
+                    // Return RAW load value - AbstractLoadMetric handles capacity normalization
+                    return load;
+                }
             }
-        } catch (IOException | NumberFormatException e) {
-            // On error, return 0
-            System.err.println("Error reading load from file: " + e.getMessage());
+        } catch (FileNotFoundException e) {
+            log.warn("***** File not found: " + loadfile + " *****", e);
+        } catch (NumberFormatException e) {
+            log.error("***** Error parsing load value *****", e);
+        } finally {
+            if (scanner != null) {
+                scanner.close();
+            }
         }
 
+        log.warn("***** No load found in file, returning 0.0 *****");
         return 0.0;
-    }
-
-    @Override
-    public double getCapacity() {
-        return capacity;
-    }
-
-    @Override
-    public void setWeight(int weight) {
-        this.weight = weight;
-    }
-
-    @Override
-    public int getWeight() {
-        return weight;
     }
 }

@@ -19,6 +19,8 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
     private static final String BALANCER_KEY = "balancer";
     private static final String WORKER1_KEY = "worker1";
     private static final String WORKER2_KEY = "worker2";
+    private static final String WORKER3_KEY = "worker3";
+    private static final String WORKER4_KEY = "worker4";
     private static final String HTTP_CLIENT_KEY = "httpClient";
 
     @Override
@@ -61,6 +63,24 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
                 worker2.stop();
             } catch (Exception e) {
                 log.error("Error stopping worker2", e);
+            }
+        }
+
+        WildFlyContainer worker3 = store.get(WORKER3_KEY, WildFlyContainer.class);
+        if (worker3 != null) {
+            try {
+                worker3.stop();
+            } catch (Exception e) {
+                log.error("Error stopping worker3", e);
+            }
+        }
+
+        WildFlyContainer worker4 = store.get(WORKER4_KEY, WildFlyContainer.class);
+        if (worker4 != null) {
+            try {
+                worker4.stop();
+            } catch (Exception e) {
+                log.error("Error stopping worker4", e);
             }
         }
 
@@ -145,6 +165,18 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
                 worker2.start();
                 store.put(WORKER2_KEY, worker2);
             }
+
+            if (count >= 3) {
+                WildFlyContainer worker3 = new WildFlyContainer("worker3", balancer);
+                worker3.start();
+                store.put(WORKER3_KEY, worker3);
+            }
+
+            if (count >= 4) {
+                WildFlyContainer worker4 = new WildFlyContainer("worker4", balancer);
+                worker4.start();
+                store.put(WORKER4_KEY, worker4);
+            }
         }
 
         public WildFlyContainer getWorker1() {
@@ -153,6 +185,14 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
 
         public WildFlyContainer getWorker2() {
             return store.get(WORKER2_KEY, WildFlyContainer.class);
+        }
+
+        public WildFlyContainer getWorker3() {
+            return store.get(WORKER3_KEY, WildFlyContainer.class);
+        }
+
+        public WildFlyContainer getWorker4() {
+            return store.get(WORKER4_KEY, WildFlyContainer.class);
         }
     }
 }

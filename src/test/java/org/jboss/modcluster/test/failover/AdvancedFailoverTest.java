@@ -85,44 +85,167 @@ public class AdvancedFailoverTest {
     }
 
     /**
+     * Verifies failover when worker is hard-killed (simulates crash).
+     * Passes if session continues to work after hard kill (SIGKILL).
+     */
+    @Test
+    public void testFailoverViaHardKill(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(2);
+
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Establish session
+        HttpResponse initialResponse = httpClient.get(balancerUrl);
+        String sessionCookie = initialResponse.getCookie("JSESSIONID");
+        String initialWorker = extractWorkerFromSessionId(sessionCookie);
+
+        log.info("Session established: {} on worker: {}", sessionCookie, initialWorker);
+
+        // Make several requests to verify session is active
+        for (int i = 0; i < 5; i++) {
+            HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+            softly.assertThat(response.getStatusCode())
+                    .as("Request %d with session should succeed", i + 1)
+                    .isEqualTo(200);
+        }
+
+        // Hard kill the worker holding the session (simulates crash)
+        if ("worker1".equals(initialWorker)) {
+            log.info("Hard killing worker1 (session holder) via SIGKILL...");
+            cluster.getWorker1().kill();
+        } else {
+            log.info("Hard killing worker2 (session holder) via SIGKILL...");
+            cluster.getWorker2().kill();
+        }
+
+        // Wait for failover and verify session still works
+        await().atMost(ofSeconds(60))
+                .pollInterval(ofSeconds(3))
+                .untilAsserted(() -> {
+                    try {
+                        HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+                        softly.assertThat(response.getStatusCode())
+                                .as("Session should failover after hard kill")
+                                .isEqualTo(200);
+                    } catch (Exception e) {
+                        log.debug("Failover in progress after hard kill: {}", e.getMessage());
+                        throw e;
+                    }
+                });
+
+        log.info("Session failover after hard kill completed successfully");
+    }
+
+    /**
+     * Verifies failover when application is undeployed from worker.
+     * Passes if session continues to work after app undeploy.
+     */
+    @Test
+    public void testFailoverViaUndeploy(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(2);
+
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Establish session
+        HttpResponse initialResponse = httpClient.get(balancerUrl);
+        String sessionCookie = initialResponse.getCookie("JSESSIONID");
+        String initialWorker = extractWorkerFromSessionId(sessionCookie);
+
+        log.info("Session established: {} on worker: {}", sessionCookie, initialWorker);
+
+        // Make several requests to verify session is active
+        for (int i = 0; i < 5; i++) {
+            HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+            softly.assertThat(response.getStatusCode())
+                    .as("Request %d with session should succeed", i + 1)
+                    .isEqualTo(200);
+        }
+
+        // Undeploy the app from the worker holding the session
+        if ("worker1".equals(initialWorker)) {
+            log.info("Undeploying demo.war from worker1 (session holder)...");
+            cluster.getWorker1().undeploy("demo.war");
+        } else {
+            log.info("Undeploying demo.war from worker2 (session holder)...");
+            cluster.getWorker2().undeploy("demo.war");
+        }
+
+        // Wait for failover and verify session still works
+        await().atMost(ofSeconds(60))
+                .pollInterval(ofSeconds(3))
+                .untilAsserted(() -> {
+                    try {
+                        HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+                        softly.assertThat(response.getStatusCode())
+                                .as("Session should failover after undeploy")
+                                .isEqualTo(200);
+                    } catch (Exception e) {
+                        log.debug("Failover in progress after undeploy: {}", e.getMessage());
+                        throw e;
+                    }
+                });
+
+        log.info("Session failover after undeploy completed successfully");
+    }
+
+    /**
      * Verifies deterministic failover routing based on worker configuration.
      * Passes if requests consistently route to the expected worker in a predictable order.
      */
     @Test
     public void testDeterministicFailover(TestCluster cluster, HttpClient httpClient) throws Exception {
-        cluster.startWorkers(2);
+        cluster.startWorkers(4);
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
-        // Verify both workers are active
-        Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 20);
+        // Verify all 4 workers are active
+        Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 40);
         softly.assertThat(initialDist)
-                .as("Both workers should be active initially")
-                .containsKeys("worker1", "worker2");
+                .as("All 4 workers should be active initially")
+                .containsKeys("worker1", "worker2", "worker3", "worker4");
 
-        log.info("Initial distribution: {}", initialDist);
+        log.info("Initial distribution with 4 workers: {}", initialDist);
 
-        // Stop worker1 - all traffic should deterministically go to worker2
+        // Stop worker1 - traffic should deterministically redistribute among remaining 3
         log.info("Stopping worker1 for deterministic failover test...");
         cluster.getWorker1().stop();
 
-        // Wait for deterministic failover to worker2
         await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(3))
                 .untilAsserted(() -> {
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 10);
+                    var dist = httpClient.testLoadDistribution(balancerUrl, 30);
                     softly.assertThat(dist)
-                            .as("All traffic should deterministically route to worker2")
-                            .containsOnlyKeys("worker2");
+                            .as("Traffic should route to remaining 3 workers after worker1 stops")
+                            .containsKeys("worker2", "worker3", "worker4")
+                            .doesNotContainKey("worker1");
                 });
 
-        // Verify consistent routing to worker2
-        Map<String, Integer> failoverDist = httpClient.testLoadDistribution(balancerUrl, 50);
-        log.info("Failover distribution: {}", failoverDist);
+        Map<String, Integer> after1 = httpClient.testLoadDistribution(balancerUrl, 30);
+        log.info("Distribution after worker1 stopped: {}", after1);
 
-        softly.assertThat(failoverDist)
-                .as("Deterministic failover should route all traffic to worker2")
-                .containsOnlyKeys("worker2");
+        // Stop worker2 - traffic should deterministically redistribute among remaining 2
+        log.info("Stopping worker2...");
+        cluster.getWorker2().stop();
+
+        await().atMost(ofSeconds(60))
+                .pollInterval(ofSeconds(3))
+                .untilAsserted(() -> {
+                    var dist = httpClient.testLoadDistribution(balancerUrl, 20);
+                    softly.assertThat(dist)
+                            .as("Traffic should route to remaining 2 workers")
+                            .containsKeys("worker3", "worker4")
+                            .doesNotContainKeys("worker1", "worker2");
+                });
+
+        Map<String, Integer> after2 = httpClient.testLoadDistribution(balancerUrl, 20);
+        log.info("Distribution after worker2 stopped: {}", after2);
+
+        // Verify final deterministic routing to remaining workers
+        softly.assertThat(after2)
+                .as("Deterministic failover should route all traffic to worker3 and worker4")
+                .containsOnlyKeys("worker3", "worker4");
+
+        log.info("Deterministic failover with 4 workers verified successfully");
     }
 
     /**
@@ -281,6 +404,61 @@ public class AdvancedFailoverTest {
                 .isGreaterThanOrEqualTo(0.7);
 
         log.info("Success rate under load: {}", successRate);
+    }
+
+    /**
+     * Verifies that balancer respects configured health check and broken node timeout settings.
+     * Tests that failed worker is detected within expected time based on configuration.
+     */
+    @Test
+    public void testHealthCheckAndBrokenNodeTimeout(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(2);
+
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Verify both workers active
+        Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 20);
+        softly.assertThat(initialDist)
+                .as("Both workers should be active initially")
+                .containsKeys("worker1", "worker2");
+
+        log.info("Initial distribution: {}", initialDist);
+
+        // Record time when we kill the worker
+        long killTime = System.currentTimeMillis();
+
+        log.info("Hard killing worker1 to test health check detection...");
+        cluster.getWorker1().kill();
+
+        // Wait for balancer to detect worker is down
+        // With health-check-interval=5s and broken-node-timeout=10s, detection should happen within ~15s
+        await().atMost(ofSeconds(20))
+                .pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    var dist = httpClient.testLoadDistribution(balancerUrl, 10);
+                    softly.assertThat(dist)
+                            .as("Traffic should route only to worker2 after health check detects worker1 down")
+                            .containsOnlyKeys("worker2");
+                });
+
+        long detectionTime = System.currentTimeMillis() - killTime;
+        log.info("Broken worker detected in {} ms (health-check-interval=5s, broken-node-timeout=10s)", detectionTime);
+
+        // Verify detection happened within expected timeframe
+        // Should be detected within broken-node-timeout (10s) + health-check-interval (5s) + margin
+        softly.assertThat(detectionTime)
+                .as("Broken worker should be detected within configured timeout (~15s)")
+                .isLessThan(20000); // 20 seconds with margin
+
+        // Verify traffic continues to route only to surviving worker
+        Map<String, Integer> finalDist = httpClient.testLoadDistribution(balancerUrl, 50);
+        log.info("Final distribution after detection: {}", finalDist);
+
+        softly.assertThat(finalDist)
+                .as("All traffic should route to worker2 after worker1 marked as broken")
+                .containsOnlyKeys("worker2");
+
+        log.info("Health check and broken node timeout verification completed");
     }
 
     /**
