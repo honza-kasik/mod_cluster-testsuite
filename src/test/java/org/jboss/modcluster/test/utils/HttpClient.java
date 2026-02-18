@@ -60,6 +60,27 @@ public class HttpClient {
     }
 
     /**
+     * Perform a GET request with a custom timeout.
+     * Useful for long-running operations like load generation.
+     */
+    public HttpResponse getWithTimeout(String url, long timeout, TimeUnit unit) throws IOException {
+        OkHttpClient customClient = client.newBuilder()
+                .readTimeout(timeout, unit)
+                .build();
+
+        Request request = new Request.Builder().url(url).build();
+
+        try (Response response = customClient.newCall(request).execute()) {
+            return new HttpResponse(
+                    response.code(),
+                    response.body() != null ? response.body().string() : "",
+                    extractCookies(response),
+                    extractHeaders(response)
+            );
+        }
+    }
+
+    /**
      * Perform a GET request with session cookie (sticky sessions).
      */
     public HttpResponse getWithSession(String url, String sessionCookie) throws IOException {

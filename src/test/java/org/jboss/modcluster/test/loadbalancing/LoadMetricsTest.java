@@ -18,6 +18,7 @@ import org.wildfly.extras.creaper.core.online.operations.Operations;
 import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
 
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -333,6 +334,158 @@ public class LoadMetricsTest {
                 .isGreaterThan(0);
 
         log.info("Initial load reporting verified");
+    }
+
+    /**
+     * Verifies that heap load metric responds to memory pressure.
+     * When heap usage increases (memory allocated), the load value should decrease (less available capacity).
+     * Following noe-tests approach: measure load value after stress completes.
+     * Note: mod_cluster load value scale: 100 = fully available/idle, 0 = overloaded/unavailable.
+     */
+    @Test
+    public void testHeapLoadMetric(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(1);
+        WildFlyContainer worker1 = cluster.getWorker1();
+
+        // Configure worker to use only heap metric
+        worker1.configureLoadMetric("heap");
+
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Wait for heap metric to stabilize after configuration change
+        // Try to get baseline > 10 like noe-tests (though with modern WildFly this may vary)
+        log.info("Waiting for heap metric to stabilize (60s timeout, target >10)...");
+        int baselineLoadValue = -1;
+        Map<String, ModelNode> workers;
+        for (int i = 0; i < 30; i++) { // 60 second timeout
+            Thread.sleep(2000);
+            workers = cluster.getBalancer().getWorkerInfo();
+            baselineLoadValue = workers.get("worker1").get("load").asInt();
+            log.info("Stabilization check: load value={}", baselineLoadValue);
+            if (baselineLoadValue > 10) {
+                log.info("System stabilized at load={}", baselineLoadValue);
+                break;
+            }
+        }
+
+        log.info("Baseline load value: {} (100=idle, 0=overloaded)", baselineLoadValue);
+
+        // Generate memory load: 2 minutes like noe-tests (300MB to match noe-tests)
+        log.info("Generating memory load (300MB for 120 seconds)...");
+        String loadUrl = balancerUrl + "load/memory?megabytes=300&duration=120000";
+
+        HttpClient.HttpResponse response = httpClient.getWithTimeout(loadUrl, 3, TimeUnit.MINUTES);
+        log.info("Load generation completed with status: {}", response.getStatusCode());
+
+        // Check load value immediately after stress
+        workers = cluster.getBalancer().getWorkerInfo();
+        int loadValueAfterStress = workers.get("worker1").get("load").asInt();
+        log.info("Load value after heap stress: {}", loadValueAfterStress);
+
+        // Conditional cooldown like noe-tests: only wait for recovery if load == 1 (completely overloaded)
+        int loadValueForComparison = loadValueAfterStress;
+        if (loadValueAfterStress == 1) {
+            log.info("System overloaded (load=1), waiting for recovery (60s timeout)...");
+            // Wait until load is no longer 1 (system recovers from overload)
+            for (int i = 0; i < 30; i++) { // 60 second timeout
+                Thread.sleep(2000);
+                workers = cluster.getBalancer().getWorkerInfo();
+                int currentLoad = workers.get("worker1").get("load").asInt();
+                log.info("Recovery check: load={}", currentLoad);
+                if (currentLoad != 1) {
+                    log.info("System recovered from overload: load={}", currentLoad);
+                    loadValueForComparison = currentLoad;
+                    break;
+                }
+            }
+        }
+
+        log.info("Comparing baseline={} vs post-stress={}", baselineLoadValue, loadValueForComparison);
+
+        // Verify heap metric caused a load decrease (like noe-tests magicNumber check)
+        int loadValueChange = baselineLoadValue - loadValueForComparison;
+        softly.assertThat(loadValueChange)
+                .as("Heap metric should cause noticeable load value change under memory pressure (baseline=%d, after=%d)",
+                    baselineLoadValue, loadValueForComparison)
+                .isGreaterThanOrEqualTo(10);
+
+        log.info("Heap load metric verified: baseline={}, after stress={}, change={}",
+                baselineLoadValue, loadValueForComparison, loadValueChange);
+    }
+
+    /**
+     * Verifies that CPU load metric responds to CPU pressure.
+     * When CPU usage increases (CPU stress), the load value should decrease (less available capacity).
+     * Following noe-tests approach: measure load value after cooldown period.
+     * Note: mod_cluster load value scale: 100 = fully available/idle, 0 = overloaded/unavailable.
+     */
+    @Test
+    public void testCpuLoadMetric(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(1);
+        WildFlyContainer worker1 = cluster.getWorker1();
+
+        // Configure worker to use only CPU metric (it's default, but explicit)
+        worker1.configureLoadMetric("cpu");
+
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Wait for system to stabilize - wait for load value > 70 (like noe-tests)
+        log.info("Waiting for system to stabilize (load value > 70)...");
+        int baselineLoadValue = -1;
+        for (int i = 0; i < 30; i++) { // 60 second timeout
+            Map<String, ModelNode> workers = cluster.getBalancer().getWorkerInfo();
+            baselineLoadValue = workers.get("worker1").get("load").asInt();
+            log.info("Stabilization check: load value={} (target >70)", baselineLoadValue);
+            if (baselineLoadValue > 70) {
+                break;
+            }
+            Thread.sleep(2000);
+        }
+
+        log.info("Baseline load value after stabilization: {} (100=idle, 0=overloaded)", baselineLoadValue);
+
+        // Generate CPU load: 2 minutes like noe-tests
+        log.info("Generating CPU load (120 seconds on all cores)...");
+        String loadUrl = balancerUrl + "load/cpu?duration=120000";
+
+        HttpClient.HttpResponse response = httpClient.getWithTimeout(loadUrl, 3, TimeUnit.MINUTES);
+        log.info("Load generation completed with status: {}", response.getStatusCode());
+
+        // Check load value immediately after CPU stress
+        Map<String, ModelNode> workers = cluster.getBalancer().getWorkerInfo();
+        int loadValueAfterRoasting = workers.get("worker1").get("load").asInt();
+        log.info("Load value immediately after CPU roasting: {}", loadValueAfterRoasting);
+
+        // Wait for cooldown (CPU usage returns to normal)
+        log.info("Waiting for CPU cooldown (60 seconds)...");
+        for (int i = 0; i < 30; i++) {
+            Thread.sleep(2000);
+            workers = cluster.getBalancer().getWorkerInfo();
+            int currentLoadValue = workers.get("worker1").get("load").asInt();
+            log.info("Cooldown check: load value={}", currentLoadValue);
+            if (currentLoadValue > 1) {
+                break;
+            }
+        }
+
+        // Get load value after cooldown
+        workers = cluster.getBalancer().getWorkerInfo();
+        int loadValueAfterCooldown = workers.get("worker1").get("load").asInt();
+        log.info("Load value after cooldown: {}", loadValueAfterCooldown);
+
+        // After cooldown, CPU usage has decreased but may not have fully returned to idle
+        // So load value should be lower than baseline (not fully recovered)
+        softly.assertThat(loadValueAfterCooldown)
+                .as("Load value after cooldown should still be below baseline (CPU metric detects recent activity)")
+                .isLessThan(baselineLoadValue);
+
+        int loadValueChange = baselineLoadValue - loadValueAfterCooldown;
+        softly.assertThat(loadValueChange)
+                .as("CPU metric should cause noticeable load value change after stress+cooldown")
+                .isGreaterThanOrEqualTo(5);
+
+        log.info("CPU load metric verified: baseline load value={}, after roasting={}, after cooldown={}, change={}",
+                baselineLoadValue, loadValueAfterRoasting, loadValueAfterCooldown, loadValueChange);
     }
 
     /**

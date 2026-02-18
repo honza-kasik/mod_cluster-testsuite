@@ -99,6 +99,7 @@ public class WildFlyContainer {
                 .withNetwork(balancer.getNetwork())
                 .withNetworkAliases(name)
                 .withExposedPorts(HTTP_PORT, HTTPS_PORT, MANAGEMENT_PORT)
+                .withEnv("JAVA_OPTS", "-Xms2048m -Xmx2048m")
                 .withCommand("/opt/wildfly/bin/standalone.sh",
                             "-b", "0.0.0.0",
                             "-bmanagement", "0.0.0.0",
@@ -611,6 +612,47 @@ public class WildFlyContainer {
         );
 
         log.info("Custom load metric module deployed to worker '{}'", name);
+    }
+
+    /**
+     * Configure which built-in load metric to use.
+     * By default, WildFly has "cpu" metric. This only changes config if needed.
+     *
+     * @param metricName Name of the metric to use ("cpu" or "heap")
+     */
+    public void configureLoadMetric(String metricName) throws Exception {
+        log.info("Configuring worker '{}' to use '{}' load metric", name, metricName);
+
+        Operations ops = getOperations();
+        Address dynamicProviderAddr = Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "dynamic");
+
+        if (metricName.equals("cpu")) {
+            // CPU is already the default, nothing to do
+            log.info("CPU metric is already configured by default");
+            return;
+        }
+
+        // For non-CPU metrics: remove CPU and add the desired metric
+        Address cpuMetricAddr = dynamicProviderAddr.and("load-metric", "cpu");
+        if (ops.exists(cpuMetricAddr)) {
+            ops.remove(cpuMetricAddr);
+            log.info("Removed default CPU metric");
+        }
+
+        Address metricAddr = dynamicProviderAddr.and("load-metric", metricName);
+        // Add metric with required attributes: type and weight (matching noe-tests)
+        ops.add(metricAddr, Values.of("type", metricName).and("weight", 1))
+                .assertSuccess("Failed to add load metric: " + metricName);
+        log.info("Added load metric: {} with type={} and weight=1", metricName, metricName);
+
+        // Reload to apply changes
+        log.info("Reloading server to apply load metric configuration...");
+        getAdministration().reload();
+
+        // Wait for reload
+        waitForManagementReady();
+
+        log.info("Worker '{}' configured to use '{}' metric", name, metricName);
     }
 
     /**
