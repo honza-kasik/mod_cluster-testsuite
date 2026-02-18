@@ -131,7 +131,7 @@ public class WildFlyContainer {
      * Configure static proxy connection to the balancer.
      * Creates an outbound-socket-binding and configures mod_cluster to use it.
      */
-    private void configureStaticProxy() {
+    public void configureStaticProxy() {
         try {
             OnlineManagementClient client = getManagementClient();
             Operations ops = getOperations();
@@ -180,7 +180,7 @@ public class WildFlyContainer {
     /**
      * Deploy the demo application for testing.
      */
-    private void deployDemoApp() {
+    public void deployDemoApp() {
         try {
             // Copy demo.war from resources
             File demoWar = new File("src/test/resources/deployments/demo.war");
@@ -471,13 +471,37 @@ public class WildFlyContainer {
     }
 
     /**
-     * Reload the server.
+     * Reload the server configuration (preserves changes, lighter than full restart).
      */
-    public void reload() throws IOException, InterruptedException, TimeoutException {
+    public void reload() throws Exception {
         log.info("Reloading worker '{}'", name);
-        Administration admin = getAdministration();
-        admin.reload();
-        log.info("Worker '{}' reloaded", name);
+
+        OnlineManagementClient client = getManagementClient();
+
+        // Execute reload operation
+        ModelNode reloadOp = new ModelNode();
+        reloadOp.get("operation").set("reload");
+        reloadOp.get("blocking").set(false); // Don't block waiting
+
+        ModelNode result = client.execute(reloadOp);
+        if (!"success".equals(result.get("outcome").asString())) {
+            throw new RuntimeException("Reload failed: " + result.get("failure-description").asString());
+        }
+
+        // Close and nullify client as server is reloading
+        client.close();
+        managementClient = null;
+
+        log.info("Reload initiated, waiting for server to come back up...");
+
+        // Wait for server to come back up
+        waitForManagementReady();
+
+        // Reconfigure static proxy and redeploy demo after reload
+        configureStaticProxy();
+        deployDemoApp();
+
+        log.info("Worker '{}' reloaded successfully", name);
     }
 
     /**
@@ -517,5 +541,382 @@ public class WildFlyContainer {
 
         result.assertSuccess();
         log.info("Set mod_cluster attribute '{}' to '{}' on worker '{}'", attributeName, value, name);
+    }
+
+    /**
+     * Deploy custom load metric module to WildFly.
+     * Copies JAR and module.xml to the modules directory.
+     */
+    public void deployCustomLoadMetric() throws Exception {
+        log.info("Deploying custom load metric to worker '{}'", name);
+
+        // Copy JAR file
+        File jarFile = new File("src/test/resources/custom-load-metric/target/custom-load-metric.jar");
+        if (!jarFile.exists()) {
+            throw new IllegalStateException("Custom load metric JAR not found. Run: mvn -f src/test/resources/custom-load-metric/pom.xml clean package");
+        }
+
+        // Copy module.xml
+        File moduleXml = new File("src/test/resources/custom-load-metric/module.xml");
+        if (!moduleXml.exists()) {
+            throw new IllegalStateException("Custom load metric module.xml not found at: " + moduleXml.getAbsolutePath());
+        }
+
+        String modulePath = "/opt/wildfly/modules/org/jboss/modcluster/test/metric/main/";
+
+        // Create module directory
+        container.execInContainer("mkdir", "-p", modulePath);
+
+        // Copy files to container
+        container.copyFileToContainer(
+                org.testcontainers.utility.MountableFile.forHostPath(jarFile.toPath()),
+                modulePath + "custom-load-metric.jar"
+        );
+
+        container.copyFileToContainer(
+                org.testcontainers.utility.MountableFile.forHostPath(moduleXml.toPath()),
+                modulePath + "module.xml"
+        );
+
+        log.info("Custom load metric module deployed to worker '{}'", name);
+    }
+
+    /**
+     * Configure custom load metric in mod_cluster subsystem.
+     * Adds the custom load metric to the dynamic load provider.
+     * The custom metric module must already be available (pre-baked in image or deployed).
+     * Stops and restarts the mod_cluster proxy to force metric reload.
+     *
+     * @param loadFilePath Path to file containing load data
+     * @param capacity Maximum load value for normalization
+     * @param weight Weight of this metric in load calculation
+     */
+    public void configureCustomLoadMetric(String loadFilePath, int capacity, int weight) throws Exception {
+        log.info("Configuring custom load metric on worker '{}' (file={}, capacity={}, weight={})",
+                name, loadFilePath, capacity, weight);
+
+        Operations ops = getOperations();
+
+        // Build the custom-load-metric address
+        Address metricAddress = Address.subsystem("modcluster")
+                .and("proxy", "default")
+                .and("load-provider", "dynamic")
+                .and("custom-load-metric", "file-based");
+
+        // Build properties for the custom load metric
+        ModelNode properties = new ModelNode();
+        properties.get("loadFile").set(loadFilePath);
+        properties.get("parseExpression").set("^LOAD: ([0-9]+)$");
+
+        // Add the custom load metric using Creaper Operations
+        ModelNodeResult result = ops.add(metricAddress,
+                org.wildfly.extras.creaper.core.online.operations.Values.empty()
+                        .and("class", "org.jboss.modcluster.test.metric.FileBasedLoadMetric")
+                        .and("module", "org.jboss.modcluster.test.metric")
+                        .and("capacity", capacity)
+                        .and("weight", weight)
+                        .and("property", properties));
+
+        result.assertSuccess();
+
+        log.info("Custom load metric added to configuration, restarting server to load module...");
+
+        getAdministration().restart();
+
+        managementClient = null;
+
+        log.info("Server restart initiated, waiting for server to come back up...");
+
+        // Wait for server to restart and management interface to be ready
+        waitForManagementReady();
+
+        // Reconfigure static proxy and redeploy demo after restart
+        configureStaticProxy();
+        deployDemoApp();
+
+        log.info("Custom load metric activated on worker '{}'", name);
+    }
+
+    /**
+     * Restart the container (stop and start) to apply configuration changes.
+     * Reconfigures static proxy, redeploys custom load metric module, and redeploys demo app after restart.
+     */
+    public void restart() throws Exception {
+        log.info("Restarting worker '{}'", name);
+
+        // Remember if custom load metric was deployed
+        File customMetricJar = new File("src/test/resources/custom-load-metric/target/custom-load-metric.jar");
+        boolean hasCustomMetric = customMetricJar.exists();
+
+        // Close management client before stopping
+        if (managementClient != null) {
+            try {
+                managementClient.close();
+            } catch (IOException e) {
+                log.warn("Error closing management client for restart", e);
+            }
+            managementClient = null;
+        }
+
+        // Stop and start container
+        container.stop();
+        container.start();
+
+        log.info("Worker '{}' restarted, waiting for server startup...", name);
+
+        // Wait for management interface to be ready (poll instead of sleep)
+        waitForManagementReady();
+
+        // Redeploy custom load metric if it was deployed before restart
+        if (hasCustomMetric) {
+            log.info("Redeploying custom load metric module after restart...");
+            deployCustomLoadMetric();
+        }
+
+        // Reconfigure static proxy connection
+        configureStaticProxy();
+
+        // Redeploy demo application
+        deployDemoApp();
+
+        log.info("Worker '{}' restart complete", name);
+    }
+
+    /**
+     * Wait for management interface to be ready by polling.
+     */
+    private void waitForManagementReady() throws Exception {
+        int maxAttempts = 60;
+        for (int i = 0; i < maxAttempts; i++) {
+            try {
+                OnlineManagementClient client = getManagementClient();
+                // Try a simple operation
+                ModelNode result = client.execute(":read-attribute(name=server-state)");
+                if (result.get("outcome").asString().equals("success")) {
+                    log.info("Management interface ready for worker '{}'", name);
+                    // Give it a bit more time to be fully stable
+                    Thread.sleep(2000);
+                    return;
+                }
+            } catch (Exception e) {
+                // Not ready yet, wait and retry
+            }
+            Thread.sleep(1000);
+        }
+        throw new RuntimeException("Management interface not ready after " + maxAttempts + " seconds");
+    }
+
+    /**
+     * Wait for worker to fully register with the balancer after startup.
+     */
+    public void waitForBalancerRegistration(String balancerUrl, int timeoutSeconds) throws Exception {
+        log.info("Waiting for worker '{}' to register with balancer...", name);
+
+        long startTime = System.currentTimeMillis();
+        long timeoutMillis = timeoutSeconds * 1000L;
+
+        while (System.currentTimeMillis() - startTime < timeoutMillis) {
+            try {
+                // Try to make a request through the balancer
+                String testUrl = balancerUrl;
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(testUrl).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(2000);
+                conn.setReadTimeout(2000);
+
+                int responseCode = conn.getResponseCode();
+                if (responseCode == 200) {
+                    // Read response to check which worker served it
+                    java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(conn.getInputStream()));
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+                    reader.close();
+
+                    // Check if any worker is serving (both should eventually register)
+                    if (response.toString().contains("Served by")) {
+                        log.info("Worker registered - balancer is routing traffic");
+                        Thread.sleep(2000); // Extra time for full registration
+                        return;
+                    }
+                }
+                conn.disconnect();
+            } catch (Exception e) {
+                // Not ready yet, continue waiting
+            }
+            Thread.sleep(1000);
+        }
+
+        log.warn("Worker '{}' may not be fully registered after {} seconds", name, timeoutSeconds);
+    }
+
+    /**
+     * Write load value to the container for custom load metric testing.
+     *
+     * @param loadValue The load value to write (will be normalized by capacity)
+     */
+    public void writeLoadValue(int loadValue) throws Exception {
+        writeLoadValue(loadValue, "/tmp/modcluster-load.txt");
+    }
+
+    /**
+     * Write load value to a specific file in the container.
+     * Uses file copy with retry logic to handle transient SIGPIPE errors after container restart.
+     *
+     * @param loadValue The load value to write
+     * @param filePath Path to the load file in the container
+     */
+    public void writeLoadValue(int loadValue, String filePath) throws Exception {
+        log.info("Setting load value {} on worker '{}' (file: {})", loadValue, name, filePath);
+
+        // Create temp file with load value
+        java.io.File tempFile = java.io.File.createTempFile("modcluster-load-", ".txt");
+        try {
+            java.nio.file.Files.writeString(tempFile.toPath(), String.format("LOAD: %d%n", loadValue));
+
+            // Retry copy operation to handle transient SIGPIPE errors
+            int maxRetries = 5;
+            Exception lastException = null;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    container.copyFileToContainer(
+                        org.testcontainers.utility.MountableFile.forHostPath(tempFile.toPath()),
+                        filePath
+                    );
+                    log.debug("Load value {} written to {} on worker '{}' (attempt {})",
+                        loadValue, filePath, name, attempt);
+                    return; // Success
+                } catch (Exception e) {
+                    lastException = e;
+                    if (e.getMessage() != null && e.getMessage().contains("SIGPIPE") && attempt < maxRetries) {
+                        log.debug("SIGPIPE error on attempt {}, retrying after 2s...", attempt);
+                        Thread.sleep(2000);
+                    } else if (attempt < maxRetries) {
+                        log.debug("Error on attempt {}, retrying: {}", attempt, e.getMessage());
+                        Thread.sleep(1000);
+                    }
+                }
+            }
+
+            // All retries failed
+            throw new RuntimeException("Failed to write load value after " + maxRetries + " attempts", lastException);
+        } finally {
+            tempFile.delete();
+        }
+    }
+
+    /**
+     * Wait for worker to be accessible via the balancer.
+     * Polls the balancer URL until the worker responds or timeout is reached.
+     *
+     * @param balancerUrl The balancer URL to test
+     * @param timeoutSeconds Maximum time to wait
+     * @return true if worker became accessible, false if timeout
+     */
+    public boolean waitForRegistration(String balancerUrl, int timeoutSeconds) throws Exception {
+        log.info("Waiting for worker '{}' to be accessible via balancer: {}", name, balancerUrl);
+
+        long startTime = System.currentTimeMillis();
+        long timeoutMillis = timeoutSeconds * 1000L;
+
+        while (System.currentTimeMillis() - startTime < timeoutMillis) {
+            try {
+                // Try to access via balancer
+                var execResult = container.execInContainer(
+                    "sh", "-c",
+                    String.format("curl -s -o /dev/null -w '%%{http_code}' '%s' 2>/dev/null || echo 000", balancerUrl)
+                );
+
+                String httpCode = execResult.getStdout().trim();
+                if ("200".equals(httpCode)) {
+                    log.info("Worker '{}' is accessible via balancer", name);
+                    return true;
+                }
+
+                Thread.sleep(1000);
+            } catch (Exception e) {
+                // Continue waiting
+                Thread.sleep(1000);
+            }
+        }
+
+        log.warn("Worker '{}' not accessible via balancer after {} seconds", name, timeoutSeconds);
+        return false;
+    }
+
+    /**
+     * Get the last N lines from the WildFly server log.
+     *
+     * @param lines Number of lines to retrieve
+     * @return Server log content
+     */
+    public String getServerLog(int lines) throws Exception {
+        var result = container.execInContainer(
+            "sh", "-c",
+            String.format("tail -%d /opt/wildfly/standalone/log/server.log 2>/dev/null || echo 'Log file not found'", lines)
+        );
+        return result.getStdout();
+    }
+
+    /**
+     * Get the full server log.
+     *
+     * @return Complete server log content
+     */
+    public String getServerLog() throws Exception {
+        var result = container.execInContainer(
+            "cat", "/opt/wildfly/standalone/log/server.log"
+        );
+        return result.getStdout();
+    }
+
+    /**
+     * Grep the server log for specific patterns.
+     *
+     * @param pattern Regex pattern to search for
+     * @return Matching lines from the log
+     */
+    public String grepServerLog(String pattern) throws Exception {
+        var result = container.execInContainer(
+            "sh", "-c",
+            String.format("grep -i '%s' /opt/wildfly/standalone/log/server.log || echo 'No matches found'", pattern)
+        );
+        return result.getStdout();
+    }
+
+    /**
+     * Check if custom load metric module files exist in the container.
+     *
+     * @return true if module files are present
+     */
+    public boolean hasCustomLoadMetricModule() throws Exception {
+        try {
+            var jarCheck = container.execInContainer(
+                "test", "-f", "/opt/wildfly/modules/org/jboss/modcluster/test/metric/main/custom-load-metric.jar"
+            );
+            var xmlCheck = container.execInContainer(
+                "test", "-f", "/opt/wildfly/modules/org/jboss/modcluster/test/metric/main/module.xml"
+            );
+            return jarCheck.getExitCode() == 0 && xmlCheck.getExitCode() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * List custom load metric module files.
+     *
+     * @return Directory listing or error message
+     */
+    public String listCustomLoadMetricModule() throws Exception {
+        var result = container.execInContainer(
+            "sh", "-c",
+            "ls -la /opt/wildfly/modules/org/jboss/modcluster/test/metric/main/ 2>&1"
+        );
+        return result.getStdout();
     }
 }

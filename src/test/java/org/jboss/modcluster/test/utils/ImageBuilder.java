@@ -35,6 +35,26 @@ public class ImageBuilder {
 
             log.info("Building Docker image from ZIP: {} with {}", zipFileName, javaVersion);
 
+            // Check if custom load metric JAR exists
+            File customMetricJar = new File("src/test/resources/custom-load-metric/target/custom-load-metric.jar");
+            File customMetricModuleXml = new File("src/test/resources/custom-load-metric/module.xml");
+            boolean hasCustomMetric = customMetricJar.exists() && customMetricModuleXml.exists();
+
+            // Copy custom metric files to build context if they exist
+            if (hasCustomMetric) {
+                log.info("Copying custom load metric to build context");
+                java.nio.file.Files.copy(
+                    customMetricJar.toPath(),
+                    new File(buildDir, "custom-load-metric.jar").toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                );
+                java.nio.file.Files.copy(
+                    customMetricModuleXml.toPath(),
+                    new File(buildDir, "module.xml").toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                );
+            }
+
             // Create Dockerfile
             File dockerfile = new File(buildDir, "Dockerfile.tmp");
             try (FileWriter writer = new FileWriter(dockerfile)) {
@@ -54,17 +74,33 @@ public class ImageBuilder {
                     "    echo 'User creation output:' && \\\n" +
                     "    cat /opt/wildfly/standalone/configuration/mgmt-users.properties && \\\n" +
                     "    chown -R 185:0 /opt/wildfly && \\\n" +
-                    "    chmod -R g+rw /opt/wildfly\n" +
-                    "USER 185\n" +
-                    "ENV JBOSS_HOME=/opt/wildfly\n" +
-                    "ENV PATH=\"/opt/wildfly/bin:${PATH}\"\n" +
-                    "EXPOSE 8080 8443 9990 6666\n",
+                    "    chmod -R g+rw /opt/wildfly\n",
                     javaVersion,
                     zipFileName, zipFileName,
                     zipFileName,
                     zipFileName,
                     zipFileName
                 ));
+
+                // Add custom load metric module if available
+                if (hasCustomMetric) {
+                    log.info("Including custom load metric module in image");
+                    writer.write(
+                        "# Add custom load metric module\n" +
+                        "RUN mkdir -p /opt/wildfly/modules/org/jboss/modcluster/test/metric/main\n" +
+                        "COPY custom-load-metric.jar /opt/wildfly/modules/org/jboss/modcluster/test/metric/main/\n" +
+                        "COPY module.xml /opt/wildfly/modules/org/jboss/modcluster/test/metric/main/\n" +
+                        "RUN chown -R 185:0 /opt/wildfly/modules/org/jboss/modcluster/test/metric && \\\n" +
+                        "    chmod -R g+rw /opt/wildfly/modules/org/jboss/modcluster/test/metric\n"
+                    );
+                }
+
+                writer.write(
+                    "USER 185\n" +
+                    "ENV JBOSS_HOME=/opt/wildfly\n" +
+                    "ENV PATH=\"/opt/wildfly/bin:${PATH}\"\n" +
+                    "EXPOSE 8080 8443 9990 6666\n"
+                );
             }
 
             // Build image using docker build
