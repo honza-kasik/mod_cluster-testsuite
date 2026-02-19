@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -71,7 +72,7 @@ public class AdvancedFailoverTest {
                 .untilAsserted(() -> {
                     try {
                         HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
-                        softly.assertThat(response.getStatusCode())
+                        assertThat(response.getStatusCode())
                                 .as("Session should failover successfully")
                                 .isEqualTo(200);
                     } catch (Exception e) {
@@ -124,7 +125,7 @@ public class AdvancedFailoverTest {
                 .untilAsserted(() -> {
                     try {
                         HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
-                        softly.assertThat(response.getStatusCode())
+                        assertThat(response.getStatusCode())
                                 .as("Session should failover after hard kill")
                                 .isEqualTo(200);
                     } catch (Exception e) {
@@ -164,10 +165,10 @@ public class AdvancedFailoverTest {
         // Undeploy the app from the worker holding the session
         if ("worker1".equals(initialWorker)) {
             log.info("Undeploying demo.war from worker1 (session holder)...");
-            cluster.getWorker1().undeploy("demo.war");
+            new org.jboss.modcluster.test.utils.WildFlyDeploymentManager(cluster.getWorker1()).undeploy("demo.war");
         } else {
             log.info("Undeploying demo.war from worker2 (session holder)...");
-            cluster.getWorker2().undeploy("demo.war");
+            new org.jboss.modcluster.test.utils.WildFlyDeploymentManager(cluster.getWorker2()).undeploy("demo.war");
         }
 
         // Wait for failover and verify session still works
@@ -176,7 +177,7 @@ public class AdvancedFailoverTest {
                 .untilAsserted(() -> {
                     try {
                         HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
-                        softly.assertThat(response.getStatusCode())
+                        assertThat(response.getStatusCode())
                                 .as("Session should failover after undeploy")
                                 .isEqualTo(200);
                     } catch (Exception e) {
@@ -213,8 +214,8 @@ public class AdvancedFailoverTest {
         await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(3))
                 .untilAsserted(() -> {
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 30);
-                    softly.assertThat(dist)
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 30);
+                    assertThat(dist)
                             .as("Traffic should route to remaining 3 workers after worker1 stops")
                             .containsKeys("worker2", "worker3", "worker4")
                             .doesNotContainKey("worker1");
@@ -230,8 +231,8 @@ public class AdvancedFailoverTest {
         await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(3))
                 .untilAsserted(() -> {
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 20);
-                    softly.assertThat(dist)
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 20);
+                    assertThat(dist)
                             .as("Traffic should route to remaining 2 workers")
                             .containsKeys("worker3", "worker4")
                             .doesNotContainKeys("worker1", "worker2");
@@ -328,11 +329,11 @@ public class AdvancedFailoverTest {
         await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(3))
                 .untilAsserted(() -> {
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 10);
-                    softly.assertThat(dist)
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 10);
+                    assertThat(dist)
                             .as("Traffic should failover to worker2 during unregistration")
                             .containsOnlyKeys("worker2");
-                    softly.assertThat(dist.get("worker2"))
+                    assertThat(dist.get("worker2"))
                             .as("Worker2 should handle all successful requests")
                             .isGreaterThan(0);
                 });
@@ -389,8 +390,8 @@ public class AdvancedFailoverTest {
         await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(3))
                 .untilAsserted(() -> {
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 20);
-                    softly.assertThat(dist)
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 20);
+                    assertThat(dist)
                             .as("All traffic should route to worker2 after failover under load")
                             .containsOnlyKeys("worker2");
                 });
@@ -435,8 +436,8 @@ public class AdvancedFailoverTest {
         await().atMost(ofSeconds(20))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 10);
-                    softly.assertThat(dist)
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 10);
+                    assertThat(dist)
                             .as("Traffic should route only to worker2 after health check detects worker1 down")
                             .containsOnlyKeys("worker2");
                 });

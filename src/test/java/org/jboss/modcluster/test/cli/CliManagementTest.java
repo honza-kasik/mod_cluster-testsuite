@@ -85,7 +85,7 @@ public class CliManagementTest {
         WildFlyContainer worker = cluster.getWorker1();
 
         // Read status-interval using Creaper helper method
-        ModelNode statusInterval = worker.readModClusterAttribute("status-interval");
+        ModelNode statusInterval = worker.modCluster().readModClusterAttribute("status-interval");
 
         log.info("Status interval: {}", statusInterval);
 
@@ -143,7 +143,7 @@ public class CliManagementTest {
         WildFlyContainer worker = cluster.getWorker1();
 
         // Read current status interval using Creaper
-        ModelNode currentValue = worker.readModClusterAttribute("status-interval");
+        ModelNode currentValue = worker.modCluster().readModClusterAttribute("status-interval");
 
         log.info("Current status interval: {}", currentValue.asInt());
 
@@ -154,10 +154,10 @@ public class CliManagementTest {
         int originalValue = currentValue.asInt();
 
         // Write new status interval using Creaper
-        worker.writeModClusterAttribute("status-interval", 20);
+        worker.modCluster().writeModClusterAttribute("status-interval", 20);
 
         // Verify the change
-        ModelNode newValue = worker.readModClusterAttribute("status-interval");
+        ModelNode newValue = worker.modCluster().readModClusterAttribute("status-interval");
 
         log.info("New status interval: {}", newValue.asInt());
 
@@ -166,7 +166,7 @@ public class CliManagementTest {
                 .isEqualTo(20);
 
         // Restore original value
-        worker.writeModClusterAttribute("status-interval", originalValue);
+        worker.modCluster().writeModClusterAttribute("status-interval", originalValue);
     }
 
     /**
@@ -179,7 +179,7 @@ public class CliManagementTest {
         WildFlyContainer worker = cluster.getWorker1();
 
         // Check if demo.war is deployed using Creaper
-        boolean isDeployed = worker.isDeployed("demo.war");
+        boolean isDeployed = worker.deployment().isDeployed("demo.war");
 
         log.info("demo.war deployed: {}", isDeployed);
 

@@ -101,21 +101,21 @@ public class LoadMetricsTest {
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
         // Check if custom load metric module is present in container image
-        boolean w1HasModule = worker1.hasCustomLoadMetricModule();
-        boolean w2HasModule = worker2.hasCustomLoadMetricModule();
+        boolean w1HasModule = worker1.loadMetrics().hasCustomLoadMetricModule();
+        boolean w2HasModule = worker2.loadMetrics().hasCustomLoadMetricModule();
 
         log.info("Worker1 has custom metric module: {}", w1HasModule);
         log.info("Worker2 has custom metric module: {}", w2HasModule);
 
         if (w1HasModule) {
-            String w1Files = worker1.listCustomLoadMetricModule();
+            String w1Files = worker1.loadMetrics().listCustomLoadMetricModule();
             log.info("Worker1 module files: {}", w1Files.replace("\n", " | "));
         } else {
             log.warn("Worker1 custom metric module NOT FOUND - image may not have been built with module");
         }
 
         if (w2HasModule) {
-            String w2Files = worker2.listCustomLoadMetricModule();
+            String w2Files = worker2.loadMetrics().listCustomLoadMetricModule();
             log.info("Worker2 module files: {}", w2Files.replace("\n", " | "));
         } else {
             log.warn("Worker2 custom metric module NOT FOUND - image may not have been built with module");
@@ -127,14 +127,14 @@ public class LoadMetricsTest {
 
         // Set initial neutral load values
         String loadFilePath = "/tmp/modcluster-load.txt";
-        worker1.writeLoadValue(500, loadFilePath);
-        worker2.writeLoadValue(500, loadFilePath);
+        worker1.loadMetrics().writeLoadValue(500, loadFilePath);
+        worker2.loadMetrics().writeLoadValue(500, loadFilePath);
 
         // Configure custom load metric (will trigger restart)
         // Use weight=1 like noe-tests (with no other metrics, weight doesn't matter)
         log.info("Configuring custom load metric (weight=1 matching noe-tests)...");
-        worker1.configureCustomLoadMetric(loadFilePath, 1000, 1);
-        worker2.configureCustomLoadMetric(loadFilePath, 1000, 1);
+        worker1.loadMetrics().configureCustomLoadMetric(loadFilePath, 1000, 1);
+        worker2.loadMetrics().configureCustomLoadMetric(loadFilePath, 1000, 1);
 
         // Verify custom metric is configured in subsystem
         verifyCustomMetricConfigured(worker1, worker2);
@@ -145,8 +145,8 @@ public class LoadMetricsTest {
 
         // SCENARIO 1: High load on worker1, low load on worker2
         log.info("SCENARIO 1: Setting worker1=900 (high), worker2=100 (low)");
-        worker1.writeLoadValue(900, loadFilePath);
-        worker2.writeLoadValue(100, loadFilePath);
+        worker1.loadMetrics().writeLoadValue(900, loadFilePath);
+        worker2.loadMetrics().writeLoadValue(100, loadFilePath);
 
         // Wait for balancer to receive STATUS messages with correct load values
         // Expected load = (1000 - fileValue) / 10 (following noe-tests formula)
@@ -167,8 +167,8 @@ public class LoadMetricsTest {
 
         // SCENARIO 2: Reverse the loads
         log.info("SCENARIO 2: Reversing - worker1=100 (low), worker2=900 (high)");
-        worker1.writeLoadValue(100, loadFilePath);
-        worker2.writeLoadValue(900, loadFilePath);
+        worker1.loadMetrics().writeLoadValue(100, loadFilePath);
+        worker2.loadMetrics().writeLoadValue(900, loadFilePath);
 
         // Wait for balancer to receive STATUS messages with correct load values
         // worker1: (1000 - 100) / 10 = 90
@@ -325,7 +325,7 @@ public class LoadMetricsTest {
 
         // Read worker's status-interval to verify load reporting is configured
         WildFlyContainer worker = cluster.getWorker1();
-        ModelNode statusInterval = worker.readModClusterAttribute("status-interval");
+        ModelNode statusInterval = worker.modCluster().readModClusterAttribute("status-interval");
 
         log.info("Worker registered with status-interval: {} seconds", statusInterval.asInt());
 
@@ -348,7 +348,7 @@ public class LoadMetricsTest {
         WildFlyContainer worker1 = cluster.getWorker1();
 
         // Configure worker to use only heap metric
-        worker1.configureLoadMetric("heap");
+        worker1.loadMetrics().configureLoadMetric("heap");
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
@@ -425,7 +425,7 @@ public class LoadMetricsTest {
         WildFlyContainer worker1 = cluster.getWorker1();
 
         // Configure worker to use only CPU metric (it's default, but explicit)
-        worker1.configureLoadMetric("cpu");
+        worker1.loadMetrics().configureLoadMetric("cpu");
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 

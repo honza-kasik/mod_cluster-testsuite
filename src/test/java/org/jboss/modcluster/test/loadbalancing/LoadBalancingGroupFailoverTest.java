@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -87,11 +88,11 @@ public class LoadBalancingGroupFailoverTest {
                 .pollInterval(ofSeconds(3))
                 .untilAsserted(() -> {
                     // Use testLoadDistribution which handles connection failures gracefully
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 10);
-                    softly.assertThat(dist)
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 10);
+                    assertThat(dist)
                             .as("All requests should go to worker2 after worker1 stops")
                             .containsOnlyKeys("worker2");
-                    softly.assertThat(dist.get("worker2"))
+                    assertThat(dist.get("worker2"))
                             .as("worker2 should be receiving all successful requests")
                             .isGreaterThan(0);
                 });

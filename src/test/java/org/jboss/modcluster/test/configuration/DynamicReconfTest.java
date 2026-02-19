@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -57,8 +58,8 @@ public class DynamicReconfTest {
         await().atMost(ofSeconds(30))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 10);
-                    softly.assertThat(dist)
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 10);
+                    assertThat(dist)
                             .as("Both workers should receive traffic after worker2 registration")
                             .containsKeys("worker1", "worker2");
                 });
@@ -86,17 +87,17 @@ public class DynamicReconfTest {
         WildFlyContainer worker = cluster.getWorker1();
 
         // Read initial flush-packets setting using Creaper
-        org.jboss.dmr.ModelNode initialValue = worker.readModClusterAttribute("flush-packets");
+        org.jboss.dmr.ModelNode initialValue = worker.modCluster().readModClusterAttribute("flush-packets");
 
         log.info("Initial flush-packets: {}", initialValue.asBoolean());
 
         boolean originalValue = initialValue.asBoolean();
 
         // Change configuration dynamically using Creaper
-        worker.writeModClusterAttribute("flush-packets", !originalValue);
+        worker.modCluster().writeModClusterAttribute("flush-packets", !originalValue);
 
         // Verify the change
-        org.jboss.dmr.ModelNode newValue = worker.readModClusterAttribute("flush-packets");
+        org.jboss.dmr.ModelNode newValue = worker.modCluster().readModClusterAttribute("flush-packets");
 
         log.info("New flush-packets: {}", newValue.asBoolean());
 
@@ -105,7 +106,7 @@ public class DynamicReconfTest {
                 .isEqualTo(!originalValue);
 
         // Restore original value
-        worker.writeModClusterAttribute("flush-packets", originalValue);
+        worker.modCluster().writeModClusterAttribute("flush-packets", originalValue);
     }
 
     /**
@@ -132,11 +133,11 @@ public class DynamicReconfTest {
         await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(3))
                 .untilAsserted(() -> {
-                    var dist = httpClient.testLoadDistribution(balancerUrl, 10);
-                    softly.assertThat(dist)
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 10);
+                    assertThat(dist)
                             .as("Only worker2 should receive traffic after worker1 stops")
                             .containsOnlyKeys("worker2");
-                    softly.assertThat(dist.get("worker2"))
+                    assertThat(dist.get("worker2"))
                             .as("worker2 should be receiving all successful requests")
                             .isGreaterThan(0);
                 });

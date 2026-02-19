@@ -1,7 +1,5 @@
 package org.jboss.modcluster.test;
 
-import org.assertj.core.api.SoftAssertions;
-import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.jboss.modcluster.test.base.ModClusterTestExtension;
 import org.jboss.modcluster.test.base.ModClusterTestExtension.TestCluster;
@@ -23,9 +21,6 @@ import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
 public class DebugTest {
 
     private static final Logger log = LoggerFactory.getLogger(DebugTest.class);
-
-    @InjectSoftAssertions
-    private SoftAssertions softly;
 
     /**
      * Diagnostic test to verify worker registration and balancer configuration by accessing both directly and via balancer.
@@ -120,7 +115,7 @@ public class DebugTest {
         log.info("Registered balancers: {}", balancersResult.value());
 
         // If there are balancers, check for nodes inside them
-        if (balancersResult.value().asList().size() > 0) {
+        if (!balancersResult.value().asList().isEmpty()) {
             String balancerName = balancersResult.value().asList().get(0).asString();
             log.info("Checking balancer: {}", balancerName);
             Address balancerAddr =

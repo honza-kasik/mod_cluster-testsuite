@@ -3,20 +3,14 @@ package org.jboss.modcluster.test.utils;
 import org.jboss.dmr.ModelNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.wildfly.extras.creaper.core.ManagementClient;
-import org.wildfly.extras.creaper.core.online.ModelNodeResult;
 import org.wildfly.extras.creaper.core.online.OnlineManagementClient;
 import org.wildfly.extras.creaper.core.online.OnlineOptions;
-import org.wildfly.extras.creaper.core.online.operations.Address;
-import org.wildfly.extras.creaper.core.online.operations.OperationException;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
-import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
-import org.wildfly.extras.creaper.core.online.operations.Values;
 import org.wildfly.extras.creaper.core.online.operations.admin.Administration;
-import org.wildfly.extras.creaper.commands.deployments.Deploy;
-import org.wildfly.extras.creaper.commands.deployments.Undeploy;
 
 import java.io.File;
 import java.io.IOException;
@@ -40,6 +34,9 @@ public class WildFlyContainer {
     private final BalancerContainer balancer;
     private GenericContainer<?> container;
     private OnlineManagementClient managementClient;
+    private WildFlyDeploymentManager deploymentManager;
+    private WildFlyModClusterManager modClusterManager;
+    private WildFlyLoadMetricsManager loadMetricsManager;
 
     public WildFlyContainer(String name, BalancerContainer balancer) {
         this.name = name;
@@ -123,83 +120,12 @@ public class WildFlyContainer {
         }
 
         // Configure static proxy connection
-        configureStaticProxy();
+        modCluster().configureStaticProxy();
 
         // Deploy demo application automatically
-        deployDemoApp();
+        deployment().deployDemoApp();
     }
 
-    /**
-     * Configure static proxy connection to the balancer.
-     * Creates an outbound-socket-binding and configures mod_cluster to use it.
-     */
-    public void configureStaticProxy() {
-        try {
-            OnlineManagementClient client = getManagementClient();
-            Operations ops = getOperations();
-
-            // Step 1: Create outbound-socket-binding to balancer
-            log.info("Creating outbound-socket-binding for balancer");
-
-            org.jboss.dmr.ModelNode addSocketBinding = new org.jboss.dmr.ModelNode();
-            org.jboss.dmr.ModelNode address = addSocketBinding.get("address");
-            address.add("socket-binding-group", "standard-sockets");
-            address.add("remote-destination-outbound-socket-binding", "modcluster-balancer");
-            addSocketBinding.get("operation").set("add");
-            addSocketBinding.get("host").set("balancer");
-            addSocketBinding.get("port").set(8080);  // Undertow balancer listens for MCMP on HTTP port
-
-            org.jboss.dmr.ModelNode result = client.execute(addSocketBinding);
-            if (!result.get("outcome").asString().equals("success")) {
-                log.debug("Socket binding may already exist or failed: {}", result.get("failure-description").asString());
-            }
-
-            // Step 2: Set proxy list to use the outbound-socket-binding
-            Address mcProxyAddress = Address.subsystem("modcluster").and("proxy", "default");
-            org.jboss.dmr.ModelNode proxyList = new org.jboss.dmr.ModelNode();
-            proxyList.add("modcluster-balancer");
-
-            ModelNodeResult writeResult =
-                ops.writeAttribute(mcProxyAddress, "proxies", proxyList);
-            writeResult.assertSuccess();
-
-            // Step 3: Set listener to "default" for HTTP communication with Undertow balancers
-            // (default listener attribute is "ajp" which is for Apache httpd)
-            ModelNodeResult listenerResult =
-                ops.writeAttribute(mcProxyAddress, "listener", "default");
-            listenerResult.assertSuccess();
-
-            log.info("Mod_cluster static proxy configured successfully on worker '{}'", name);
-
-            // Wait for the proxy connection to establish
-            Thread.sleep(5000);
-
-        } catch (Exception e) {
-            log.error("Failed to configure static proxy on worker '{}'", name, e);
-        }
-    }
-
-    /**
-     * Deploy the demo application for testing.
-     */
-    public void deployDemoApp() {
-        try {
-            // Copy demo.war from resources
-            File demoWar = new File("src/test/resources/deployments/demo.war");
-            if (demoWar.exists()) {
-                log.info("Deploying demo application to worker '{}' using Creaper", name);
-                deploy(demoWar);
-
-                // Wait for mod_cluster to register the context with the balancer
-                log.debug("Waiting for context registration with mod_cluster...");
-                Thread.sleep(2000);
-            } else {
-                log.warn("Demo application not found at: {}", demoWar.getAbsolutePath());
-            }
-        } catch (Exception e) {
-            log.error("Failed to deploy demo application to worker '{}'", name, e);
-        }
-    }
 
     /**
      * Get WildFly ZIP path from system property or environment variable.
@@ -401,6 +327,45 @@ public class WildFlyContainer {
     }
 
     /**
+     * Get deployment manager for this worker.
+     * Provides access to deployment operations (deploy, undeploy, status checks).
+     *
+     * @return cached deployment manager instance
+     */
+    public WildFlyDeploymentManager deployment() {
+        if (deploymentManager == null) {
+            deploymentManager = new WildFlyDeploymentManager(this);
+        }
+        return deploymentManager;
+    }
+
+    /**
+     * Get mod_cluster configuration manager for this worker.
+     * Provides access to mod_cluster subsystem operations (proxy config, attributes).
+     *
+     * @return cached mod_cluster manager instance
+     */
+    public WildFlyModClusterManager modCluster() {
+        if (modClusterManager == null) {
+            modClusterManager = new WildFlyModClusterManager(this);
+        }
+        return modClusterManager;
+    }
+
+    /**
+     * Get load metrics manager for this worker.
+     * Provides access to load metric configuration (custom metrics, load values).
+     *
+     * @return cached load metrics manager instance
+     */
+    public WildFlyLoadMetricsManager loadMetrics() {
+        if (loadMetricsManager == null) {
+            loadMetricsManager = new WildFlyLoadMetricsManager(this);
+        }
+        return loadMetricsManager;
+    }
+
+    /**
      * Execute a CLI command on this WildFly instance using Creaper.
      *
      * @deprecated Use getManagementClient() and Creaper operations instead
@@ -416,7 +381,7 @@ public class WildFlyContainer {
      * Execute a CLI command using shell (fallback for complex commands).
      */
     public String executeCliViaShell(String command) throws Exception {
-        var execResult = container.execInContainer(
+        Container.ExecResult execResult = container.execInContainer(
                 "sh", "-c",
                 "jboss-cli.sh --connect --controller=localhost:9990 --command='" + command + "'"
         );
@@ -428,80 +393,6 @@ public class WildFlyContainer {
         return execResult.getStdout();
     }
 
-    /**
-     * Deploy an application to this worker using Creaper.
-     */
-    public void deploy(File deploymentFile) throws Exception {
-        log.info("Deploying {} to worker '{}' using Creaper", deploymentFile.getName(), name);
-
-        OnlineManagementClient client = getManagementClient();
-
-        // Deploy using Creaper deployment command
-        client.apply(new Deploy.Builder(deploymentFile).build());
-
-        log.info("Deployment {} succeeded on worker '{}'", deploymentFile.getName(), name);
-    }
-
-    /**
-     * Deploy an application using filesystem deployment (alternative method).
-     */
-    public void deployViaFilesystem(File deploymentFile) throws Exception {
-        log.info("Deploying {} to worker '{}' via filesystem", deploymentFile.getName(), name);
-
-        container.copyFileToContainer(
-                org.testcontainers.utility.MountableFile.forHostPath(deploymentFile.toPath()),
-                "/opt/wildfly/standalone/deployments/" + deploymentFile.getName()
-        );
-
-        // Wait for deployment (check for .deployed marker)
-        String deploymentName = deploymentFile.getName();
-        int maxWait = 30; // seconds
-        for (int i = 0; i < maxWait; i++) {
-            try {
-                var result = container.execInContainer(
-                        "sh", "-c",
-                        "ls /opt/wildfly/standalone/deployments/" + deploymentName + ".deployed 2>/dev/null"
-                );
-                if (result.getExitCode() == 0) {
-                    log.info("Deployment {} succeeded on worker '{}'", deploymentName, name);
-                    return;
-                }
-            } catch (Exception e) {
-                // Ignore, keep waiting
-            }
-            Thread.sleep(1000);
-        }
-
-        log.warn("Deployment {} may not have completed on worker '{}' (timeout)", deploymentName, name);
-    }
-
-    /**
-     * Undeploy an application from this worker using Creaper.
-     */
-    public void undeploy(String deploymentName) throws Exception {
-        log.info("Undeploying {} from worker '{}'", deploymentName, name);
-
-        OnlineManagementClient client = getManagementClient();
-        client.apply(new Undeploy.Builder(deploymentName).build());
-
-        log.info("Undeployed {} from worker '{}'", deploymentName, name);
-    }
-
-    /**
-     * Check if a deployment exists and is enabled.
-     */
-    public boolean isDeployed(String deploymentName) throws IOException, OperationException {
-        Operations ops = getOperations();
-        Address deploymentAddress = Address.deployment(deploymentName);
-
-        if (!ops.exists(deploymentAddress)) {
-            return false;
-        }
-
-        ModelNodeResult result = ops.readAttribute(deploymentAddress, "enabled");
-        result.assertSuccess();
-        return result.value().asBoolean();
-    }
 
     /**
      * Reload the server configuration (preserves changes, lighter than full restart).
@@ -531,217 +422,12 @@ public class WildFlyContainer {
         waitForManagementReady();
 
         // Reconfigure static proxy and redeploy demo after reload
-        configureStaticProxy();
-        deployDemoApp();
+        modCluster().configureStaticProxy();
+        deployment().deployDemoApp();
 
         log.info("Worker '{}' reloaded successfully", name);
     }
 
-    /**
-     * Read a mod_cluster subsystem attribute.
-     */
-    public ModelNode readModClusterAttribute(String attributeName) throws IOException, OperationException {
-        Operations ops = getOperations();
-        Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
-        ModelNodeResult result = ops.readAttribute(modclusterAddress, attributeName);
-        result.assertSuccess();
-        return result.value();
-    }
-
-    /**
-     * Write a mod_cluster subsystem attribute.
-     */
-    public void writeModClusterAttribute(String attributeName, Object value) throws IOException, OperationException {
-        Operations ops = getOperations();
-        Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
-
-        ModelNodeResult result;
-
-        // Handle different value types
-        if (value instanceof Boolean) {
-            result = ops.writeAttribute(modclusterAddress, attributeName, (Boolean) value);
-        } else if (value instanceof Integer) {
-            result = ops.writeAttribute(modclusterAddress, attributeName, (Integer) value);
-        } else if (value instanceof Long) {
-            result = ops.writeAttribute(modclusterAddress, attributeName, (Long) value);
-        } else if (value instanceof String) {
-            result = ops.writeAttribute(modclusterAddress, attributeName, (String) value);
-        } else if (value instanceof ModelNode) {
-            result = ops.writeAttribute(modclusterAddress, attributeName, (ModelNode) value);
-        } else {
-            throw new IllegalArgumentException("Unsupported attribute value type: " + value.getClass());
-        }
-
-        result.assertSuccess();
-        log.info("Set mod_cluster attribute '{}' to '{}' on worker '{}'", attributeName, value, name);
-    }
-
-    /**
-     * Deploy custom load metric module to WildFly.
-     * Copies JAR and module.xml to the modules directory.
-     */
-    public void deployCustomLoadMetric() throws Exception {
-        log.info("Deploying custom load metric to worker '{}'", name);
-
-        // Copy JAR file
-        File jarFile = new File("src/test/resources/custom-load-metric/target/custom-load-metric.jar");
-        if (!jarFile.exists()) {
-            throw new IllegalStateException("Custom load metric JAR not found. Run: mvn -f src/test/resources/custom-load-metric/pom.xml clean package");
-        }
-
-        // Copy module.xml
-        File moduleXml = new File("src/test/resources/custom-load-metric/module.xml");
-        if (!moduleXml.exists()) {
-            throw new IllegalStateException("Custom load metric module.xml not found at: " + moduleXml.getAbsolutePath());
-        }
-
-        String modulePath = "/opt/wildfly/modules/org/jboss/modcluster/test/metric/main/";
-
-        // Create module directory
-        container.execInContainer("mkdir", "-p", modulePath);
-
-        // Copy files to container
-        container.copyFileToContainer(
-                org.testcontainers.utility.MountableFile.forHostPath(jarFile.toPath()),
-                modulePath + "custom-load-metric.jar"
-        );
-
-        container.copyFileToContainer(
-                org.testcontainers.utility.MountableFile.forHostPath(moduleXml.toPath()),
-                modulePath + "module.xml"
-        );
-
-        log.info("Custom load metric module deployed to worker '{}'", name);
-    }
-
-    /**
-     * Configure which built-in load metric to use.
-     * By default, WildFly has "cpu" metric. This only changes config if needed.
-     *
-     * @param metricName Name of the metric to use ("cpu" or "heap")
-     */
-    public void configureLoadMetric(String metricName) throws Exception {
-        log.info("Configuring worker '{}' to use '{}' load metric", name, metricName);
-
-        Operations ops = getOperations();
-        Address dynamicProviderAddr = Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "dynamic");
-
-        if (metricName.equals("cpu")) {
-            // CPU is already the default, nothing to do
-            log.info("CPU metric is already configured by default");
-            return;
-        }
-
-        // For non-CPU metrics: remove CPU and add the desired metric
-        Address cpuMetricAddr = dynamicProviderAddr.and("load-metric", "cpu");
-        if (ops.exists(cpuMetricAddr)) {
-            ops.remove(cpuMetricAddr);
-            log.info("Removed default CPU metric");
-        }
-
-        Address metricAddr = dynamicProviderAddr.and("load-metric", metricName);
-        // Add metric with required attributes: type and weight (matching noe-tests)
-        ops.add(metricAddr, Values.of("type", metricName).and("weight", 1))
-                .assertSuccess("Failed to add load metric: " + metricName);
-        log.info("Added load metric: {} with type={} and weight=1", metricName, metricName);
-
-        // Reload to apply changes
-        log.info("Reloading server to apply load metric configuration...");
-        getAdministration().reload();
-
-        // Wait for reload
-        waitForManagementReady();
-
-        log.info("Worker '{}' configured to use '{}' metric", name, metricName);
-    }
-
-    /**
-     * Configure custom load metric in mod_cluster subsystem.
-     * Adds the custom load metric to the dynamic load provider.
-     * The custom metric module must already be available (pre-baked in image or deployed).
-     * Stops and restarts the mod_cluster proxy to force metric reload.
-     *
-     * @param loadFilePath Path to file containing load data
-     * @param capacity Maximum load value for normalization
-     * @param weight Weight of this metric in load calculation
-     */
-    public void configureCustomLoadMetric(String loadFilePath, int capacity, int weight) throws Exception {
-        log.info("Configuring custom load metric on worker '{}' (file={}, capacity={}, weight={})",
-                name, loadFilePath, capacity, weight);
-
-        Operations ops = getOperations();
-
-        Address dynamicProviderAddr = Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "dynamic");
-
-        // FIRST: Set history=0 and decay=0 for immediate load reflection (BEFORE adding custom metric)
-        log.info("Setting history=0 and decay=0 for immediate load reflection");
-        ops.writeAttribute(dynamicProviderAddr, "history", 0).assertSuccess();
-        ops.writeAttribute(dynamicProviderAddr, "decay", 0).assertSuccess();
-
-        // SECOND: Remove CPU metric (following noe-tests approach: only custom metric, no built-in metrics)
-        log.info("Removing all built-in load metrics to use only custom metric");
-        Address cpuMetricAddr = dynamicProviderAddr.and("load-metric", "cpu");
-        ops.remove(cpuMetricAddr).assertSuccess();
-
-        // THIRD: Add the custom load metric
-        Address metricAddress = dynamicProviderAddr.and("custom-load-metric", "file-based");
-
-        // Build properties for the custom load metric (lowercase names to match setters)
-        ModelNode properties = new ModelNode();
-        properties.get("loadfile").set(loadFilePath);
-        properties.get("parseexpression").set("^LOAD: ([0-9]+)$");
-
-        // Add the custom load metric using Creaper Operations
-        ModelNodeResult result = ops.add(metricAddress,
-                Values.empty()
-                        .and("class", "org.jboss.modcluster.test.metric.FileBasedLoadMetric")
-                        .and("module", "org.jboss.modcluster.test.metric")
-                        .and("capacity", capacity)
-                        .and("weight", weight)
-                        .and("property", properties));
-        result.assertSuccess();
-
-        ops.removeIfExists(Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "simple"));
-
-
-        log.info("Custom load metric added to configuration, restarting server to load module...");
-
-        getAdministration().restart();
-
-        log.info("Server restart initiated, waiting for server to come back up...");
-
-        // Wait for server to restart and management interface to be ready
-        waitForManagementReady();
-
-        // Verify final configuration from management model
-        ops = getOperations();
-        ModelNodeResult finalConfig = ops.readResource(
-            Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "dynamic"),
-            ReadResourceOption.INCLUDE_RUNTIME, ReadResourceOption.RECURSIVE);
-        log.info("Final load-provider configuration after restart (from management): {}", finalConfig.value().toJSONString(true));
-
-        // Also read the actual XML configuration file to see what's persisted
-        try {
-            org.testcontainers.containers.Container.ExecResult xmlResult = container.execInContainer(
-                "cat", "/opt/wildfly/standalone/configuration/standalone-ha.xml"
-            );
-
-            // Extract just the mod_cluster subsystem section
-            String fullXml = xmlResult.getStdout();
-            int modclusterStart = fullXml.indexOf("<subsystem xmlns=\"urn:jboss:domain:modcluster:");
-            if (modclusterStart != -1) {
-                int modclusterEnd = fullXml.indexOf("</subsystem>", modclusterStart);
-                if (modclusterEnd != -1) {
-                    String modclusterXml = fullXml.substring(modclusterStart, modclusterEnd + 12);
-                    log.info("Mod_cluster subsystem in standalone-ha.xml:\n{}", modclusterXml);
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Could not read standalone-ha.xml: {}", e.getMessage());
-        }
-
-        log.info("Custom load metric activated on worker '{}'", name);
-    }
 
     /**
      * Wait for management interface to be ready by polling.
@@ -768,53 +454,6 @@ public class WildFlyContainer {
     }
 
     /**
-     * Write load value to a specific file in the container.
-     * Uses file copy with retry logic to handle transient SIGPIPE errors after container restart.
-     *
-     * @param loadValue The load value to write
-     * @param filePath Path to the load file in the container
-     */
-    public void writeLoadValue(int loadValue, String filePath) throws Exception {
-        log.info("Setting load value {} on worker '{}' (file: {})", loadValue, name, filePath);
-
-        // Create temp file with load value
-        java.io.File tempFile = java.io.File.createTempFile("modcluster-load-", ".txt");
-        try {
-            java.nio.file.Files.writeString(tempFile.toPath(), String.format("LOAD: %d%n", loadValue));
-
-            // Retry copy operation to handle transient SIGPIPE errors
-            int maxRetries = 5;
-            Exception lastException = null;
-
-            for (int attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    container.copyFileToContainer(
-                        org.testcontainers.utility.MountableFile.forHostPath(tempFile.toPath()),
-                        filePath
-                    );
-                    log.debug("Load value {} written to {} on worker '{}' (attempt {})",
-                        loadValue, filePath, name, attempt);
-                    return; // Success
-                } catch (Exception e) {
-                    lastException = e;
-                    if (e.getMessage() != null && e.getMessage().contains("SIGPIPE") && attempt < maxRetries) {
-                        log.debug("SIGPIPE error on attempt {}, retrying after 2s...", attempt);
-                        Thread.sleep(2000);
-                    } else if (attempt < maxRetries) {
-                        log.debug("Error on attempt {}, retrying: {}", attempt, e.getMessage());
-                        Thread.sleep(1000);
-                    }
-                }
-            }
-
-            // All retries failed
-            throw new RuntimeException("Failed to write load value after " + maxRetries + " attempts", lastException);
-        } finally {
-            tempFile.delete();
-        }
-    }
-
-    /**
      * Wait for worker to be accessible via the balancer.
      * Polls the balancer URL until the worker responds or timeout is reached.
      *
@@ -831,7 +470,7 @@ public class WildFlyContainer {
         while (System.currentTimeMillis() - startTime < timeoutMillis) {
             try {
                 // Try to access via balancer
-                var execResult = container.execInContainer(
+                Container.ExecResult execResult = container.execInContainer(
                     "sh", "-c",
                     String.format("curl -s -o /dev/null -w '%%{http_code}' '%s' 2>/dev/null || echo 000", balancerUrl)
                 );
@@ -860,7 +499,7 @@ public class WildFlyContainer {
      * @return Server log content
      */
     public String getServerLog(int lines) throws Exception {
-        var result = container.execInContainer(
+        Container.ExecResult result = container.execInContainer(
             "sh", "-c",
             String.format("tail -%d /opt/wildfly/standalone/log/server.log 2>/dev/null || echo 'Log file not found'", lines)
         );
@@ -873,7 +512,7 @@ public class WildFlyContainer {
      * @return Complete server log content
      */
     public String getServerLog() throws Exception {
-        var result = container.execInContainer(
+        Container.ExecResult result = container.execInContainer(
             "cat", "/opt/wildfly/standalone/log/server.log"
         );
         return result.getStdout();
@@ -886,42 +525,11 @@ public class WildFlyContainer {
      * @return Matching lines from the log
      */
     public String grepServerLog(String pattern) throws Exception {
-        var result = container.execInContainer(
+        Container.ExecResult result = container.execInContainer(
             "sh", "-c",
             String.format("grep -i '%s' /opt/wildfly/standalone/log/server.log || echo 'No matches found'", pattern)
         );
         return result.getStdout();
     }
 
-    /**
-     * Check if custom load metric module files exist in the container.
-     *
-     * @return true if module files are present
-     */
-    public boolean hasCustomLoadMetricModule() throws Exception {
-        try {
-            var jarCheck = container.execInContainer(
-                "test", "-f", "/opt/wildfly/modules/org/jboss/modcluster/test/metric/main/custom-load-metric.jar"
-            );
-            var xmlCheck = container.execInContainer(
-                "test", "-f", "/opt/wildfly/modules/org/jboss/modcluster/test/metric/main/module.xml"
-            );
-            return jarCheck.getExitCode() == 0 && xmlCheck.getExitCode() == 0;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    /**
-     * List custom load metric module files.
-     *
-     * @return Directory listing or error message
-     */
-    public String listCustomLoadMetricModule() throws Exception {
-        var result = container.execInContainer(
-            "sh", "-c",
-            "ls -la /opt/wildfly/modules/org/jboss/modcluster/test/metric/main/ 2>&1"
-        );
-        return result.getStdout();
-    }
 }

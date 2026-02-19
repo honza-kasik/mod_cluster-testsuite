@@ -39,7 +39,7 @@ public class ContextLifecycleTest {
         WildFlyContainer worker = cluster.getWorker1();
 
         // Read auto-enable-contexts setting
-        ModelNode autoEnable = worker.readModClusterAttribute("auto-enable-contexts");
+        ModelNode autoEnable = worker.modCluster().readModClusterAttribute("auto-enable-contexts");
         log.info("auto-enable-contexts: {}", autoEnable);
 
         // The default should be true
@@ -68,7 +68,7 @@ public class ContextLifecycleTest {
         WildFlyContainer worker = cluster.getWorker1();
 
         // Read excluded-contexts configuration
-        ModelNode excludedContexts = worker.readModClusterAttribute("excluded-contexts");
+        ModelNode excludedContexts = worker.modCluster().readModClusterAttribute("excluded-contexts");
         log.info("excluded-contexts: {}", excludedContexts);
 
         // By default, ROOT context ("/") is typically NOT excluded, but we can verify the mechanism
@@ -78,10 +78,10 @@ public class ContextLifecycleTest {
         String originalValue = excludedContexts.isDefined() ? excludedContexts.asString() : "";
 
         // Set excluded-contexts to exclude ROOT context
-        worker.writeModClusterAttribute("excluded-contexts", "ROOT");
+        worker.modCluster().writeModClusterAttribute("excluded-contexts", "ROOT");
 
         // Read back to verify
-        ModelNode newValue = worker.readModClusterAttribute("excluded-contexts");
+        ModelNode newValue = worker.modCluster().readModClusterAttribute("excluded-contexts");
         log.info("Updated excluded-contexts: {}", newValue);
 
         softly.assertThat(newValue.asString())
@@ -93,9 +93,9 @@ public class ContextLifecycleTest {
 
         // Restore original value
         if (originalValue.isEmpty()) {
-            worker.writeModClusterAttribute("excluded-contexts", ModelNode.fromString("undefined"));
+            worker.modCluster().writeModClusterAttribute("excluded-contexts", ModelNode.fromString("undefined"));
         } else {
-            worker.writeModClusterAttribute("excluded-contexts", originalValue);
+            worker.modCluster().writeModClusterAttribute("excluded-contexts", originalValue);
         }
 
         log.info("Excluded contexts configuration verified");
@@ -128,7 +128,7 @@ public class ContextLifecycleTest {
         // /subsystem=modcluster/mod-cluster-config=configuration:disable-context(virtualhost=default-host,context=/demo)
 
         // For this test, we'll verify the deployment status mechanism
-        boolean isEnabled = worker.isDeployed("demo.war");
+        boolean isEnabled = worker.deployment().isDeployed("demo.war");
         softly.assertThat(isEnabled)
                 .as("demo.war should be deployed and enabled")
                 .isTrue();
@@ -146,7 +146,7 @@ public class ContextLifecycleTest {
         WildFlyContainer worker = cluster.getWorker1();
 
         // Read stop-context-timeout configuration
-        ModelNode stopTimeout = worker.readModClusterAttribute("stop-context-timeout");
+        ModelNode stopTimeout = worker.modCluster().readModClusterAttribute("stop-context-timeout");
         log.info("stop-context-timeout: {}", stopTimeout);
 
         softly.assertThat(stopTimeout.asInt())
@@ -223,7 +223,7 @@ public class ContextLifecycleTest {
         log.info("Initial deployment verified, checking deployment status");
 
         // Verify deployment is present
-        boolean isDeployed = worker.isDeployed("demo.war");
+        boolean isDeployed = worker.deployment().isDeployed("demo.war");
         softly.assertThat(isDeployed)
                 .as("demo.war should be deployed")
                 .isTrue();
