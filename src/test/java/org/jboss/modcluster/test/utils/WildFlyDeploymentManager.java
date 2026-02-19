@@ -12,6 +12,7 @@ import org.wildfly.extras.creaper.commands.deployments.Deploy;
 import org.wildfly.extras.creaper.commands.deployments.Undeploy;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 
 /**
@@ -43,6 +44,28 @@ public class WildFlyDeploymentManager {
         client.apply(new Deploy.Builder(deploymentFile).build());
 
         log.info("Deployment {} succeeded on worker '{}'", deploymentFile.getName(), container.getName());
+    }
+
+    /**
+     * Deploy an application with a custom deployment name.
+     * Useful for deploying the same WAR file multiple times with different context paths.
+     *
+     * @param deploymentFile The deployment file to deploy
+     * @param deploymentName The name under which to deploy (e.g., "app1.war" creates /app1 context)
+     * @throws Exception if deployment fails
+     */
+    public void deploy(final File deploymentFile, final String deploymentName) throws Exception {
+        log.info("Deploying {} as {} to worker '{}' using Creaper",
+            deploymentFile.getName(), deploymentName, container.getName());
+
+        OnlineManagementClient client = container.getManagementClient();
+
+        // Use InputStream-based Deploy builder to specify custom deployment name
+        final FileInputStream fis = new FileInputStream(deploymentFile);
+        final Deploy deployCommand = new Deploy.Builder(fis, deploymentName, true).build();
+        client.apply(deployCommand);
+
+        log.info("Deployment {} succeeded on worker '{}'", deploymentName, container.getName());
     }
 
     /**

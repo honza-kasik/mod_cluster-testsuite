@@ -8,6 +8,7 @@ import org.wildfly.extras.creaper.core.online.ModelNodeResult;
 import org.wildfly.extras.creaper.core.online.operations.Address;
 import org.wildfly.extras.creaper.core.online.operations.OperationException;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
+import org.wildfly.extras.creaper.core.online.operations.Values;
 
 import java.io.IOException;
 
@@ -122,5 +123,89 @@ public class WildFlyModClusterManager {
 
         result.assertSuccess();
         log.info("Set mod_cluster attribute '{}' to '{}' on worker '{}'", attributeName, value, container.getName());
+    }
+
+    /**
+     * Disable a context on this worker. The context will reject new sessions
+     * but continue serving existing sessions.
+     *
+     * @param contextPath Context path (e.g., "demo" or "/demo")
+     * @param virtualHost Virtual host name (e.g., "default-host")
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void disableContext(String contextPath, String virtualHost)
+        throws IOException, OperationException {
+        Operations ops = container.getOperations();
+        Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
+
+        // Normalize context path to have leading slash
+        String normalizedContext = contextPath.startsWith("/") ? contextPath : "/" + contextPath;
+
+        ModelNodeResult result = ops.invoke(
+            "disable-context",
+            modclusterAddress,
+            Values.of("context", normalizedContext)
+                  .and("virtualhost", virtualHost)
+        );
+
+        result.assertSuccess();
+        log.info("Disabled context '{}' on virtualhost '{}' for worker '{}'",
+                 normalizedContext, virtualHost, container.getName());
+    }
+
+    /**
+     * Enable a previously disabled context on this worker.
+     *
+     * @param contextPath Context path (e.g., "demo" or "/demo")
+     * @param virtualHost Virtual host name (e.g., "default-host")
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void enableContext(String contextPath, String virtualHost)
+        throws IOException, OperationException {
+        Operations ops = container.getOperations();
+        Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
+
+        String normalizedContext = contextPath.startsWith("/") ? contextPath : "/" + contextPath;
+
+        ModelNodeResult result = ops.invoke(
+            "enable-context",
+            modclusterAddress,
+            Values.of("context", normalizedContext)
+                  .and("virtualhost", virtualHost)
+        );
+
+        result.assertSuccess();
+        log.info("Enabled context '{}' on virtualhost '{}' for worker '{}'",
+                 normalizedContext, virtualHost, container.getName());
+    }
+
+    /**
+     * Stop a context on this worker. The context will drain sessions
+     * according to stop-context-timeout and session-draining-strategy.
+     *
+     * @param contextPath Context path (e.g., "demo" or "/demo")
+     * @param virtualHost Virtual host name (e.g., "default-host")
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void stopContext(String contextPath, String virtualHost)
+        throws IOException, OperationException {
+        Operations ops = container.getOperations();
+        Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
+
+        String normalizedContext = contextPath.startsWith("/") ? contextPath : "/" + contextPath;
+
+        ModelNodeResult result = ops.invoke(
+            "stop-context",
+            modclusterAddress,
+            Values.of("context", normalizedContext)
+                  .and("virtualhost", virtualHost)
+        );
+
+        result.assertSuccess();
+        log.info("Stopped context '{}' on virtualhost '{}' for worker '{}'",
+                 normalizedContext, virtualHost, container.getName());
     }
 }
