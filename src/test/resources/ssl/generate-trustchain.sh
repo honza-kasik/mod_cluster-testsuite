@@ -12,35 +12,35 @@
 #                 Script creates following structure:
 #                    ca
 #                    ├── certs
-#                    │   └── ca.cert.pem
+#                    │   └── ca.cert.pem
 #                    ├── crlnumber
 #                    ├── index.txt
 #                    ├── index.txt.attr
 #                    ├── index.txt.old
 #                    ├── intermediate
-#                    │   ├── certs
-#                    │   │   ├── ca-chain.cert.pem //trustchain (packed ca and itermediate certs)
-#                    │   │   ├── *_client.cert.pem //end user certificate
-#                    │   │   ├── intermediate.cert.pem //intermediate certificate
-#                    │   │   └── *_server.cert.pem //server certificate
-#                    │   ├── crl
-#                    │   │   └── intermediate.crl.pem //certificate revocation list referencing revoked certificates
-#                    │   ├── crlnumber
-#                    │   ├── csr //signing requests - unimportant for future use
-#                    │   ├── keystores //PKCS#12 and JKS keystores including trustchain
-#                    │   ├── index.txt
-#                    │   ├── index.txt.attr
-#                    │   ├── index.txt.attr.old
-#                    │   ├── index.txt.old
-#                    │   ├── newcerts
-#                    │   │   ├── 1000.pem
-#                    │   │   └── 1001.pem
-#                    │   ├── private //certificate's corresponding private keys
-#                    │   │   ├── client.key.pem
-#                    │   │   ├── intermediate.key.pem
-#                    │   │   └── server.key.pem
-#                    │   ├── serial
-#                    │   └── serial.old
+#                    │   ├── certs
+#                    │   │   ├── ca-chain.cert.pem //trustchain (packed ca and intermediate certs)
+#                    │   │   ├── *_client.cert.pem //end user certificate
+#                    │   │   ├── intermediate.cert.pem //intermediate certificate
+#                    │   │   └── *_server.cert.pem //server certificate
+#                    │   ├── crl
+#                    │   │   └── intermediate.crl.pem //certificate revocation list referencing revoked certificates
+#                    │   ├── crlnumber
+#                    │   ├── csr //signing requests - unimportant for future use
+#                    │   ├── keystores //PKCS#12 and JKS keystores including trustchain
+#                    │   ├── index.txt
+#                    │   ├── index.txt.attr
+#                    │   ├── index.txt.attr.old
+#                    │   ├── index.txt.old
+#                    │   ├── newcerts
+#                    │   │   ├── 1000.pem
+#                    │   │   └── 1001.pem
+#                    │   ├── private //certificate's corresponding private keys
+#                    │   │   ├── client.key.pem
+#                    │   │   ├── intermediate.key.pem
+#                    │   │   └── server.key.pem
+#                    │   ├── serial
+#                    │   └── serial.old
 #                    ├── newcerts
 #                    ├── keystores //keystores related to CA
 #                    ├── private

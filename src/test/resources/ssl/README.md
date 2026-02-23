@@ -1,21 +1,35 @@
-This directory contains script to generate whole trustchain for testing purposes.
-Complete description of generated structere may be found in [generate-trustchain.sh](generate-trustchain.sh).
+# SSL Test Certificates
 
-## How to run
+Pre-generated PKI chain for SSL/TLS tests. Certificates are valid 2022-2032 (10 years).
 
-For quick, OS-independent generation, run following commands to perform build using docker: 
+## What tests use
+
+From `ca/intermediate/keystores/`:
+
+| Keystore | Purpose |
+|----------|---------|
+| `node1.server.keystore.jks` | Server cert for worker1 |
+| `node2.server.keystore.jks` | Server cert for worker2 |
+| `localhost.server.keystore.jks` | Server cert for balancer |
+| `ca-chain.keystore.jks` | Trust store (root + intermediate CA) |
+
+All keystores use password `testpass` and JKS format.
+
+## Regenerating certificates
+
+Remove the existing `ca/` directory first, then use Docker/Podman for OS-independent generation:
 
 ```bash
-IMAGE_NAME="my_cool_docker_image"
-docker build . -t ${IMAGE_NAME}
-docker run --rm -v $PWD/ca:/trustchain/ca:z ${IMAGE_NAME} bash generate-trustchain.sh
-
+rm -rf ca/
+docker build . -t ssl-gen
+docker run --rm -v $PWD/ca:/trustchain/ca:z ssl-gen bash generate-trustchain.sh
 ```
 
-See [Dockerfile](Dockerfile) for further information on which version of Java (keytool) and OpenSSL is being used.
-
-You can also run the script manually, if you have all dependencies installed (see [Dockerfile](Dockerfile)):
+Or run manually if OpenSSL and keytool are available:
 
 ```bash
+rm -rf ca/
 ./generate-trustchain.sh
 ```
+
+See `generate-trustchain.sh` for the full generated directory structure.
