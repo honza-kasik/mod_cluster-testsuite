@@ -4,7 +4,6 @@ import org.jboss.dmr.ModelNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.Container;
-import org.wildfly.extras.creaper.core.online.OnlineManagementClient;
 import org.wildfly.extras.creaper.core.online.ModelNodeResult;
 import org.wildfly.extras.creaper.core.online.operations.Address;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
@@ -12,6 +11,7 @@ import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
 import org.wildfly.extras.creaper.core.online.operations.Values;
 
 import java.io.File;
+import java.util.Random;
 
 /**
  * Manages load metrics configuration and management for WildFly containers.
@@ -99,12 +99,10 @@ public class WildFlyLoadMetricsManager {
                 .assertSuccess("Failed to add load metric: " + metricName);
         log.info("Added load metric: {} with type={} and weight=1", metricName, metricName);
 
-        // Reload to apply changes
+        // Reload to apply changes — uses container.reload() which properly resets the
+        // management client and reconfigures the static proxy connection to the balancer.
         log.info("Reloading server to apply load metric configuration...");
-        container.getAdministration().reload();
-
-        // Wait for reload
-        waitForManagementReady();
+        container.reload();
 
         log.info("Worker '{}' configured to use '{}' metric", container.getName(), metricName);
     }
@@ -159,117 +157,70 @@ public class WildFlyLoadMetricsManager {
         ops.removeIfExists(Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "simple"));
 
 
-        log.info("Custom load metric added to configuration, restarting server to load module...");
+        log.info("Custom load metric added to configuration, reloading server to activate module...");
 
-        container.getAdministration().restart();
-
-        log.info("Server restart initiated, waiting for server to come back up...");
-
-        // Wait for server to restart and management interface to be ready
-        waitForManagementReady();
+        // Use container.reload() which properly closes/nullifies the cached management client,
+        // creates a fresh connection, reconfigures the static proxy, and redeploys the demo app.
+        // The custom metric module is pre-baked into the container image, so a reload is sufficient
+        // to load it — a full JVM restart is not needed.
+        container.reload();
 
         // Verify final configuration from management model
-        ops = container.getOperations();
-        ModelNodeResult finalConfig = ops.readResource(
+        Operations verifyOps = container.getOperations();
+        ModelNodeResult finalConfig = verifyOps.readResource(
             Address.subsystem("modcluster").and("proxy", "default").and("load-provider", "dynamic"),
             ReadResourceOption.INCLUDE_RUNTIME, ReadResourceOption.RECURSIVE);
-        log.info("Final load-provider configuration after restart (from management): {}", finalConfig.value().toJSONString(true));
-
-        // Also read the actual XML configuration file to see what's persisted
-        try {
-            Container.ExecResult xmlResult = container.getContainer().execInContainer(
-                "cat", "/opt/wildfly/standalone/configuration/standalone-ha.xml"
-            );
-
-            // Extract just the mod_cluster subsystem section
-            String fullXml = xmlResult.getStdout();
-            int modclusterStart = fullXml.indexOf("<subsystem xmlns=\"urn:jboss:domain:modcluster:");
-            if (modclusterStart != -1) {
-                int modclusterEnd = fullXml.indexOf("</subsystem>", modclusterStart);
-                if (modclusterEnd != -1) {
-                    String modclusterXml = fullXml.substring(modclusterStart, modclusterEnd + 12);
-                    log.info("Mod_cluster subsystem in standalone-ha.xml:\n{}", modclusterXml);
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Could not read standalone-ha.xml: {}", e.getMessage());
-        }
+        log.info("Final load-provider configuration after reload (from management): {}", finalConfig.value().toJSONString(true));
 
         log.info("Custom load metric activated on worker '{}'", container.getName());
     }
 
     /**
-     * Wait for management interface to be ready by polling.
-     *
-     * @throws Exception if management interface doesn't become ready within timeout
-     */
-    private void waitForManagementReady() throws Exception {
-        int maxAttempts = 60;
-        for (int i = 0; i < maxAttempts; i++) {
-            try {
-                OnlineManagementClient client = container.getManagementClient();
-                // Try a simple operation
-                ModelNode result = client.execute(":read-attribute(name=server-state)");
-                if (result.get("outcome").asString().equals("success")) {
-                    log.info("Management interface ready for worker '{}'", container.getName());
-                    // Give it a bit more time to be fully stable
-                    Thread.sleep(2000);
-                    return;
-                }
-            } catch (Exception e) {
-                // Not ready yet, wait and retry
-            }
-            Thread.sleep(1000);
-        }
-        throw new RuntimeException("Management interface not ready after " + maxAttempts + " seconds");
-    }
-
-    /**
      * Write load value to a specific file in the container.
-     * Uses file copy with retry logic to handle transient SIGPIPE errors after container restart.
+     * Uses execInContainer to write the file directly inside the container,
+     * avoiding Testcontainers' copyFileToContainer which has dependency issues
+     * with commons-compress/commons-io version conflicts.
+     * Includes retry logic for transient Podman SIGPIPE errors.
      *
      * @param loadValue The load value to write
      * @param filePath Path to the load file in the container
-     * @throws Exception if writing the load value fails
+     * @throws Exception if writing the load value fails after all retries
      */
     public void writeLoadValue(int loadValue, String filePath) throws Exception {
         log.info("Setting load value {} on worker '{}' (file: {})", loadValue, container.getName(), filePath);
 
-        // Create temp file with load value
-        java.io.File tempFile = java.io.File.createTempFile("modcluster-load-", ".txt");
-        try {
-            java.nio.file.Files.writeString(tempFile.toPath(), String.format("LOAD: %d%n", loadValue));
+        final int maxRetries = 3;
+        final Random random = new Random();
+        Exception lastException = null;
 
-            // Retry copy operation to handle transient SIGPIPE errors
-            int maxRetries = 5;
-            Exception lastException = null;
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                Container.ExecResult result = container.getContainer().execInContainer(
+                        "sh", "-c", String.format("echo 'LOAD: %d' > %s", loadValue, filePath));
 
-            for (int attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    container.getContainer().copyFileToContainer(
-                        org.testcontainers.utility.MountableFile.forHostPath(tempFile.toPath()),
-                        filePath
-                    );
-                    log.debug("Load value {} written to {} on worker '{}' (attempt {})",
-                        loadValue, filePath, container.getName(), attempt);
-                    return; // Success
-                } catch (Exception e) {
-                    lastException = e;
-                    if (e.getMessage() != null && e.getMessage().contains("SIGPIPE") && attempt < maxRetries) {
-                        log.debug("SIGPIPE error on attempt {}, retrying after 2s...", attempt);
-                        Thread.sleep(2000);
-                    } else if (attempt < maxRetries) {
-                        log.debug("Error on attempt {}, retrying: {}", attempt, e.getMessage());
-                        Thread.sleep(1000);
-                    }
+                if (result.getExitCode() != 0) {
+                    throw new RuntimeException("Failed to write load value to " + filePath +
+                            " on worker '" + container.getName() + "': " + result.getStderr());
+                }
+
+                log.debug("Load value {} written to {} on worker '{}'", loadValue, filePath, container.getName());
+                return;
+
+            } catch (Exception e) {
+                lastException = e;
+
+                if (isTransientDockerError(e) && attempt < maxRetries) {
+                    final long delayMs = attempt * 500L + random.nextInt(300);
+                    log.warn("writeLoadValue failed with transient error on attempt {}/{}, retrying after {}ms: {}",
+                            attempt, maxRetries, delayMs, getRootCauseMessage(e));
+                    Thread.sleep(delayMs);
+                } else {
+                    throw e;
                 }
             }
-
-            // All retries failed
-            throw new RuntimeException("Failed to write load value after " + maxRetries + " attempts", lastException);
-        } finally {
-            tempFile.delete();
         }
+
+        throw lastException;
     }
 
     /**
@@ -304,5 +255,84 @@ public class WildFlyLoadMetricsManager {
             "ls -la /opt/wildfly/modules/org/jboss/modcluster/test/metric/main/ 2>&1"
         );
         return result.getStdout();
+    }
+
+    /**
+     * Sets a fixed load value for hot-standby testing.
+     * Load of 0 marks worker as hot standby (only receives traffic when others unavailable).
+     * Removes built-in metrics and configures simple load provider with fixed capacity.
+     *
+     * @param loadValue Fixed load value (0 = hot standby, 100 = fully available)
+     * @throws Exception if configuration fails
+     */
+    public void setFixedLoad(final int loadValue) throws Exception {
+        log.info("Setting fixed load value {} on worker '{}'", loadValue, container.getName());
+
+        final Operations ops = container.getOperations();
+
+        // Step 1: Remove dynamic load provider (contains CPU and other built-in metrics)
+        final Address dynamicProviderAddr = Address.subsystem("modcluster")
+            .and("proxy", "default")
+            .and("load-provider", "dynamic");
+
+        if (ops.exists(dynamicProviderAddr)) {
+            log.debug("Removing dynamic load provider");
+            ops.remove(dynamicProviderAddr).assertSuccess();
+        }
+
+        // Step 2: Add simple load provider with fixed capacity
+        final Address simpleProviderAddr = Address.subsystem("modcluster")
+            .and("proxy", "default")
+            .and("load-provider", "simple");
+
+        if (!ops.exists(simpleProviderAddr)) {
+            log.debug("Adding simple load provider with factor={}", loadValue);
+            ops.add(simpleProviderAddr, Values.of("factor", loadValue)).assertSuccess();
+        } else {
+            log.debug("Updating simple load provider factor to {}", loadValue);
+            ops.writeAttribute(simpleProviderAddr, "factor", loadValue).assertSuccess();
+        }
+
+        // Reload to apply changes
+        log.debug("Reloading server to apply fixed load configuration");
+        container.reload();
+
+        log.info("Fixed load {} configured on worker '{}'", loadValue, container.getName());
+    }
+
+    /**
+     * Check if an exception represents a transient Docker/Podman socket error (SIGPIPE, broken pipe).
+     *
+     * @param throwable Exception to check
+     * @return true if this is a transient socket error that may succeed on retry
+     */
+    private boolean isTransientDockerError(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            final String message = current.getMessage();
+            if (message != null && (message.contains("SIGPIPE")
+                    || message.contains("Broken pipe")
+                    || message.contains("přerušena")
+                    || message.contains("Connection reset")
+                    || message.contains("Socket closed"))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    /**
+     * Get the root cause message from an exception chain.
+     *
+     * @param throwable Exception to traverse
+     * @return Root cause message or top-level message if no cause
+     */
+    private String getRootCauseMessage(Throwable throwable) {
+        Throwable rootCause = throwable;
+        while (rootCause.getCause() != null) {
+            rootCause = rootCause.getCause();
+        }
+        return rootCause.getMessage() != null ? rootCause.getMessage() : rootCause.toString();
     }
 }

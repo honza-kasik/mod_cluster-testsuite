@@ -51,8 +51,43 @@ public abstract class BalancerContainer {
     public abstract void start();
 
     public void stop() {
-        if (container != null && container.isRunning()) {
-            container.stop();
+        // Stop and remove container first
+        if (container != null) {
+            try {
+                if (container.isRunning()) {
+                    container.stop();
+                    log.debug("Balancer container stopped");
+                }
+
+                // Explicitly remove container
+                String containerId = container.getContainerId();
+                if (containerId != null) {
+                    container.getDockerClient()
+                        .removeContainerCmd(containerId)
+                        .withForce(true)
+                        .exec();
+                    log.debug("Balancer container removed");
+                }
+            } catch (Exception e) {
+                log.debug("Ignoring error stopping/removing balancer container: {}", e.getMessage());
+            }
+        }
+
+        // Give more time for container removal to complete before network cleanup
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        // Close network to free resources
+        if (network != null) {
+            try {
+                network.close();
+                log.debug("Network closed");
+            } catch (Exception e) {
+                log.debug("Ignoring error closing network: {}", e.getMessage());
+            }
         }
     }
 

@@ -37,6 +37,7 @@ public class WildFlyContainer {
     private WildFlyDeploymentManager deploymentManager;
     private WildFlyModClusterManager modClusterManager;
     private WildFlyLoadMetricsManager loadMetricsManager;
+    private WildFlyJGroupsManager jgroupsManager;
 
     public WildFlyContainer(String name, BalancerContainer balancer) {
         this.name = name;
@@ -90,40 +91,101 @@ public class WildFlyContainer {
 
     /**
      * Start container from a pre-built image (either from registry or locally built).
+     * Includes optimized retry logic for transient Podman socket errors (SIGPIPE).
      */
     private void startFromPreBuiltImage(String imageName) {
-        container = new GenericContainer<>(imageName)
-                .withNetwork(balancer.getNetwork())
-                .withNetworkAliases(name)
-                .withExposedPorts(HTTP_PORT, HTTPS_PORT, MANAGEMENT_PORT)
-                .withEnv("JAVA_OPTS", "-Xms2048m -Xmx2048m")
-                .withCommand("/opt/wildfly/bin/standalone.sh",
-                            "-b", "0.0.0.0",
-                            "-bmanagement", "0.0.0.0",
-                            "-Djboss.node.name=" + name,
-                            "-Djboss.server.default.config=standalone-ha.xml",
-                            "-Djboss.modcluster.multicast.address=224.0.1.105",
-                            "-Djboss.modcluster.multicast.port=23364")
-                .waitingFor(Wait.forLogMessage(".*WFLYSRV0025.*", 1)
-                        .withStartupTimeout(Duration.ofMinutes(5)))
-                .withLogConsumer(outputFrame ->
-                        System.out.println("[" + name.toUpperCase() + "] " + outputFrame.getUtf8String().trim()));
+        final int maxRetries = 5;
+        Exception lastException = null;
+        final java.util.Random random = new java.util.Random();
 
-        container.start();
-        log.info("WildFly worker '{}' started", name);
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                container = new GenericContainer<>(imageName)
+                        .withNetwork(balancer.getNetwork())
+                        .withNetworkAliases(name)
+                        .withExposedPorts(HTTP_PORT, HTTPS_PORT, MANAGEMENT_PORT)
+                        .withEnv("JAVA_OPTS", "-Xms2048m -Xmx2048m")
+                        .withCommand("/opt/wildfly/bin/standalone.sh",
+                                    "-b", "0.0.0.0",
+                                    "-bmanagement", "0.0.0.0",
+                                    "-bprivate", "0.0.0.0",
+                                    "-Djboss.node.name=" + name,
+                                    "-Djboss.server.default.config=standalone-ha.xml",
+                                    "-Djboss.modcluster.multicast.address=224.0.1.105",
+                                    "-Djboss.modcluster.multicast.port=23364")
+                        .waitingFor(Wait.forLogMessage(".*WFLYSRV0025.*", 1)
+                                .withStartupTimeout(Duration.ofMinutes(5)))
+                        .withLogConsumer(outputFrame ->
+                                System.out.println("[" + name.toUpperCase() + "] " + outputFrame.getUtf8String().trim()));
 
-        // Wait a bit for management interface to be fully ready
-        try {
-            Thread.sleep(3000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+                container.start();
+                log.info("WildFly worker '{}' started{}", name, attempt > 1 ? " (attempt " + attempt + ")" : "");
+
+                // Wait a bit for management interface to be fully ready
+                try {
+                    Thread.sleep(3000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+
+                // Configure JGroups TCP for container-based clustering
+                // (UDP multicast discovery does not work in Docker/Podman networks)
+                jgroups().configureTcpDiscovery();
+                reloadAndWait();
+
+                // Configure static proxy connection
+                modCluster().configureStaticProxy();
+
+                // Deploy demo application automatically
+                deployment().deployDemoApp();
+
+                return; // Success - exit retry loop
+
+            } catch (Exception e) {
+                lastException = e;
+
+                // Check if this is a SIGPIPE or socket-related error
+                final boolean isSigpipe = containsInExceptionChain(e, "SIGPIPE");
+                final boolean isSocketError = containsInExceptionChain(e, "Broken pipe") ||
+                                             containsInExceptionChain(e, "Connection reset") ||
+                                             containsInExceptionChain(e, "Socket closed");
+
+                if ((isSigpipe || isSocketError) && attempt < maxRetries) {
+                    // Exponential backoff with jitter: 500ms, 1s, 1.5s + random(100-300ms)
+                    final long baseDelay = attempt * 500L;
+                    final long jitter = 100 + random.nextInt(200);
+                    final long delayMs = baseDelay + jitter;
+
+                    log.warn("Container start failed with {} on attempt {}/{}, retrying after {}ms",
+                             isSigpipe ? "SIGPIPE" : "socket error", attempt, maxRetries, delayMs);
+                    log.debug("Error details: {}", getRootCauseMessage(e));
+
+                    // Clean up failed container reference
+                    if (container != null) {
+                        try {
+                            container.close();
+                        } catch (Exception cleanupEx) {
+                            log.debug("Error during cleanup: {}", cleanupEx.getMessage());
+                        }
+                        container = null;
+                    }
+
+                    try {
+                        Thread.sleep(delayMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("Interrupted during retry backoff", ie);
+                    }
+                } else {
+                    // Not a retryable error or max retries reached
+                    break;
+                }
+            }
         }
 
-        // Configure static proxy connection
-        modCluster().configureStaticProxy();
-
-        // Deploy demo application automatically
-        deployment().deployDemoApp();
+        // All retries failed
+        throw new RuntimeException("Failed to start WildFly worker '" + name + "' after " +
+                                  maxRetries + " attempts", lastException);
     }
 
 
@@ -232,10 +294,32 @@ public class WildFlyContainer {
             managementClient = null;
         }
 
-        // Stop container
-        if (container != null && container.isRunning()) {
-            container.stop();
-            log.info("WildFly worker '{}' stopped", name);
+        // Stop and remove container
+        if (container != null) {
+            try {
+                if (container.isRunning()) {
+                    container.stop();
+                    log.info("WildFly worker '{}' stopped", name);
+                }
+
+                // Explicitly remove container to reduce Ryuk cleanup backlog
+                String containerId = container.getContainerId();
+                if (containerId != null) {
+                    container.getDockerClient()
+                        .removeContainerCmd(containerId)
+                        .withForce(true)
+                        .exec();
+                    log.debug("WildFly worker '{}' container removed", name);
+                }
+            } catch (Exception e) {
+                log.debug("Ignoring error while stopping/removing worker '{}': {}", name, e.getMessage());
+            }
+            // Clear references
+            container = null;
+            deploymentManager = null;
+            modClusterManager = null;
+            loadMetricsManager = null;
+            jgroupsManager = null;
         }
     }
 
@@ -254,19 +338,37 @@ public class WildFlyContainer {
             managementClient = null;
         }
 
-        // Kill container using SIGKILL
-        if (container != null && container.isRunning()) {
+        // Kill, stop, and remove container
+        if (container != null) {
             try {
-                container.getDockerClient()
-                        .killContainerCmd(container.getContainerId())
+                if (container.isRunning()) {
+                    String containerId = container.getContainerId();
+
+                    // SIGKILL the container
+                    container.getDockerClient()
+                        .killContainerCmd(containerId)
                         .withSignal("KILL")
                         .exec();
-                log.info("WildFly worker '{}' killed (hard stop)", name);
+                    log.info("WildFly worker '{}' killed (hard stop)", name);
+
+                    // Stop to trigger Testcontainers cleanup
+                    container.stop();
+
+                    // Explicitly remove container
+                    container.getDockerClient()
+                        .removeContainerCmd(containerId)
+                        .withForce(true)
+                        .exec();
+                    log.debug("WildFly worker '{}' container removed after kill", name);
+                }
             } catch (Exception e) {
-                log.warn("Error killing worker '{}': {}", name, e.getMessage());
-                // Fallback to regular stop
-                container.stop();
+                log.debug("Ignoring error while killing/removing worker '{}': {}", name, e.getMessage());
             }
+            // Clear all references
+            container = null;
+            deploymentManager = null;
+            modClusterManager = null;
+            loadMetricsManager = null;
         }
     }
 
@@ -366,6 +468,19 @@ public class WildFlyContainer {
     }
 
     /**
+     * Get JGroups manager for this worker.
+     * Provides access to JGroups subsystem configuration (TCP/TCPPING discovery).
+     *
+     * @return cached JGroups manager instance
+     */
+    public WildFlyJGroupsManager jgroups() {
+        if (jgroupsManager == null) {
+            jgroupsManager = new WildFlyJGroupsManager(this);
+        }
+        return jgroupsManager;
+    }
+
+    /**
      * Execute a CLI command on this WildFly instance using Creaper.
      *
      * @deprecated Use getManagementClient() and Creaper operations instead
@@ -395,9 +510,10 @@ public class WildFlyContainer {
 
 
     /**
-     * Reload the server configuration (preserves changes, lighter than full restart).
+     * Reload the server configuration and wait for management to be ready.
+     * Does not reconfigure proxy or redeploy applications.
      */
-    public void reload() throws Exception {
+    private void reloadAndWait() throws Exception {
         log.info("Reloading worker '{}'", name);
 
         OnlineManagementClient client = getManagementClient();
@@ -421,11 +537,19 @@ public class WildFlyContainer {
         // Wait for server to come back up
         waitForManagementReady();
 
+        log.info("Worker '{}' reloaded successfully", name);
+    }
+
+    /**
+     * Reload the server configuration (preserves changes, lighter than full restart).
+     * Reconfigures static proxy and redeploys demo application after reload.
+     */
+    public void reload() throws Exception {
+        reloadAndWait();
+
         // Reconfigure static proxy and redeploy demo after reload
         modCluster().configureStaticProxy();
         deployment().deployDemoApp();
-
-        log.info("Worker '{}' reloaded successfully", name);
     }
 
 
@@ -530,6 +654,44 @@ public class WildFlyContainer {
             String.format("grep -i '%s' /opt/wildfly/standalone/log/server.log || echo 'No matches found'", pattern)
         );
         return result.getStdout();
+    }
+
+    /**
+     * Check if any exception in the chain contains the specified text.
+     * Traverses the entire exception cause chain.
+     *
+     * @param throwable Exception to check
+     * @param text Text to search for
+     * @return true if text found in any exception message or toString()
+     */
+    private boolean containsInExceptionChain(Throwable throwable, String text) {
+        Throwable current = throwable;
+        while (current != null) {
+            // Check exception message
+            if (current.getMessage() != null && current.getMessage().contains(text)) {
+                return true;
+            }
+            // Check exception class name and toString()
+            if (current.toString().contains(text)) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    /**
+     * Get the root cause message from exception chain.
+     *
+     * @param throwable Exception to traverse
+     * @return Root cause message or top-level message if no cause
+     */
+    private String getRootCauseMessage(Throwable throwable) {
+        Throwable rootCause = throwable;
+        while (rootCause.getCause() != null) {
+            rootCause = rootCause.getCause();
+        }
+        return rootCause.getMessage() != null ? rootCause.getMessage() : rootCause.toString();
     }
 
 }

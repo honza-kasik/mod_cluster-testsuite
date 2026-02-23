@@ -47,13 +47,13 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
     public void afterEach(ExtensionContext context) {
         ExtensionContext.Store store = getStore(context);
 
-        // Stop workers if started
+        // Stop workers if started - ignore transient Docker API errors (SIGPIPE, etc.)
         WildFlyContainer worker1 = store.get(WORKER1_KEY, WildFlyContainer.class);
         if (worker1 != null) {
             try {
                 worker1.stop();
             } catch (Exception e) {
-                log.error("Error stopping worker1", e);
+                log.debug("Ignoring error stopping worker1: {}", e.getMessage());
             }
         }
 
@@ -62,7 +62,7 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
             try {
                 worker2.stop();
             } catch (Exception e) {
-                log.error("Error stopping worker2", e);
+                log.debug("Ignoring error stopping worker2: {}", e.getMessage());
             }
         }
 
@@ -71,7 +71,7 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
             try {
                 worker3.stop();
             } catch (Exception e) {
-                log.error("Error stopping worker3", e);
+                log.debug("Ignoring error stopping worker3: {}", e.getMessage());
             }
         }
 
@@ -80,7 +80,7 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
             try {
                 worker4.stop();
             } catch (Exception e) {
-                log.error("Error stopping worker4", e);
+                log.debug("Ignoring error stopping worker4: {}", e.getMessage());
             }
         }
 
@@ -90,8 +90,17 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
             try {
                 balancer.stop();
             } catch (Exception e) {
-                log.error("Error stopping balancer", e);
+                log.debug("Ignoring error stopping balancer: {}", e.getMessage());
             }
+        }
+
+        // Give Docker/Podman time to finish cleanup before next test starts
+        // Podman especially needs time to clean up networks and container resources
+        // SIGPIPE errors occur when creating containers too quickly after cleanup
+        try {
+            Thread.sleep(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
 
         log.info("=== Finished test: {} ===", context.getDisplayName());

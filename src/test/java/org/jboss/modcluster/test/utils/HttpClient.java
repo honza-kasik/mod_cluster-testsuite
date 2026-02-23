@@ -106,6 +106,25 @@ public class HttpClient {
     }
 
     /**
+     * Perform an HTTPS GET request with session cookie (ignoring certificate validation).
+     */
+    public HttpResponse getHttpsWithSession(String url, String sessionCookie) throws IOException {
+        Request request = new Request.Builder()
+            .url(url)
+            .addHeader("Cookie", sessionCookie)
+            .build();
+
+        try (Response response = insecureClient.newCall(request).execute()) {
+            return new HttpResponse(
+                    response.code(),
+                    response.body() != null ? response.body().string() : "",
+                    extractCookies(response),
+                    extractHeaders(response)
+            );
+        }
+    }
+
+    /**
      * Make multiple requests to test load balancing distribution.
      * Handles connection failures gracefully (e.g., when workers are being stopped).
      * Disables connection reuse to get accurate load balancing distribution.

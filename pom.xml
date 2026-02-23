@@ -21,7 +21,7 @@
         <!-- Test Framework Versions -->
         <junit.version>5.10.2</junit.version>
         <assertj.version>3.25.3</assertj.version>
-        <testcontainers.version>1.19.7</testcontainers.version>
+        <testcontainers.version>2.0.3</testcontainers.version>
 
         <!-- WildFly/EAP Versions -->
         <wildfly.version>31.0.1.Final</wildfly.version>
@@ -36,7 +36,7 @@
         <logback.version>1.5.3</logback.version>
 
         <!-- Utilities -->
-        <commons-io.version>2.15.1</commons-io.version>
+        <commons-io.version>2.18.0</commons-io.version>
         <awaitility.version>4.2.0</awaitility.version>
     </properties>
 
@@ -73,12 +73,8 @@
             <scope>test</scope>
         </dependency>
 
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>${testcontainers.version}</version>
-            <scope>test</scope>
-        </dependency>
+        <!-- Testcontainers 2.0+ integrates JUnit 5 support in main artifact -->
+        <!-- junit-jupiter extension module was removed in 2.0 -->
 
         <!-- Creaper - WildFly/EAP Management -->
         <dependency>
@@ -161,6 +157,21 @@
             <groupId>commons-io</groupId>
             <artifactId>commons-io</artifactId>
             <version>${commons-io.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- ShrinkWrap for dynamic WAR creation -->
+        <dependency>
+            <groupId>org.jboss.shrinkwrap</groupId>
+            <artifactId>shrinkwrap-api</artifactId>
+            <version>1.2.6</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jboss.shrinkwrap</groupId>
+            <artifactId>shrinkwrap-impl-base</artifactId>
+            <version>1.2.6</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

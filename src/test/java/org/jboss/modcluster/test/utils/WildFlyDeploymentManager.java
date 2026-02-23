@@ -143,9 +143,16 @@ public class WildFlyDeploymentManager {
     /**
      * Deploy the demo application for testing.
      * Copies demo.war from resources and deploys it to the worker.
+     * Checks if already deployed to avoid duplicate deployment errors.
      */
     public void deployDemoApp() {
         try {
+            // Check if demo.war is already deployed
+            if (isDeployed("demo.war")) {
+                log.debug("Demo application already deployed on worker '{}'", container.getName());
+                return;
+            }
+
             // Copy demo.war from resources
             File demoWar = new File("src/test/resources/deployments/demo.war");
             if (demoWar.exists()) {

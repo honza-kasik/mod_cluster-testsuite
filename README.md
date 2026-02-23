@@ -294,6 +294,17 @@ Based on the existing test matrix:
 
 **Image naming**: `modcluster-test/wildfly-31-0-1-final:openjdk-17`
 
+### Container Clustering (JGroups)
+
+WildFly uses JGroups for worker-to-worker session replication. The default `standalone-ha.xml` uses UDP multicast for cluster discovery, which does not work in Docker/Podman networks. To solve this, `WildFlyContainer` automatically reconfigures JGroups at startup:
+
+1. **Binds the private interface to `0.0.0.0`** (`-bprivate 0.0.0.0`) so JGroups TCP listens on the container's network interface instead of `127.0.0.1`
+2. **Switches from UDP to the TCP stack** and replaces MPING (multicast discovery) with **TCPPING** using container network aliases (`worker1[7600]`, `worker2[7600]`, etc.)
+
+This is transparent to the tests — JGroups handles internal session replication while mod_cluster handles balancer-to-worker communication via MCMP over HTTP. The two layers are independent.
+
+> **Note:** The reference noe-tests achieve the same result differently — they set `AS7_PRIVATE_IP_ADDRESS` to a real IP and rely on native multicast, which works on bare metal/VM networks.
+
 ### Balancers
 - **Undertow balancer**:
   - **With ZIP**: Builds from your WildFly/EAP ZIP (same as workers)

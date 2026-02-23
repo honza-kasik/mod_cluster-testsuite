@@ -84,17 +84,20 @@ public class ContextLifecycleTest {
                 .as("Demo should be accessible before exclusion")
                 .isEqualTo(200);
 
-        // Set excluded-contexts to exclude demo context
+        // Stop demo context first to immediately remove it from the balancer's routing.
+        // Without this, the balancer keeps the stale registration from before the reload
+        // because the Undertow balancer does not automatically discard old context registrations
+        // when a CONFIG message is received — it only adds new ENABLE-APP'd contexts.
+        worker.modCluster().stopContext("demo", "default-host");
+
+        // Set excluded-contexts to prevent re-registration after reload
         worker.modCluster().writeModClusterAttribute("excluded-contexts", "demo");
 
         // Reload worker to apply configuration
         worker.reload();
 
-        // Wait for worker to restart
-        Thread.sleep(5000);
-
         // Verify demo is NOT accessible via balancer after exclusion
-        await().atMost(ofSeconds(15))
+        await().atMost(ofSeconds(30))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);

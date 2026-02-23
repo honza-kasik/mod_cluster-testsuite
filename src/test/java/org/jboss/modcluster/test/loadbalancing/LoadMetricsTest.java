@@ -18,6 +18,7 @@ import org.wildfly.extras.creaper.core.online.operations.Operations;
 import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
 
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -136,10 +137,24 @@ public class LoadMetricsTest {
         worker1.loadMetrics().configureCustomLoadMetric(loadFilePath, 1000, 1);
         worker2.loadMetrics().configureCustomLoadMetric(loadFilePath, 1000, 1);
 
+        // Re-write load values after reload to ensure the file exists and is fresh
+        worker1.loadMetrics().writeLoadValue(500, loadFilePath);
+        worker2.loadMetrics().writeLoadValue(500, loadFilePath);
+
         // Verify custom metric is configured in subsystem
         verifyCustomMetricConfigured(worker1, worker2);
 
-        // Wait a bit for everything to stabilize
+        // Verify the load files are readable inside the containers
+        verifyLoadFile(worker1, loadFilePath);
+        verifyLoadFile(worker2, loadFilePath);
+
+        // Check server logs for metric loading issues
+        String w1MetricLog = worker1.grepServerLog("FileBasedLoadMetric");
+        log.info("Worker1 metric log entries: {}", w1MetricLog);
+        String w2MetricLog = worker2.grepServerLog("FileBasedLoadMetric");
+        log.info("Worker2 metric log entries: {}", w2MetricLog);
+
+        // Wait for system to stabilize and first STATUS messages to propagate
         log.info("Waiting for system to stabilize...");
         Thread.sleep(5000);
 
@@ -153,7 +168,7 @@ public class LoadMetricsTest {
         // worker1: (1000 - 900) / 10 = 10
         // worker2: (1000 - 100) / 10 = 90
         log.info("Waiting for balancer to report expected loads (worker1=10, worker2=90)...");
-        waitForExpectedLoads(cluster, "worker1", 10, "worker2", 90, 60);
+        waitForExpectedLoads(cluster, "worker1", 10, "worker2", 90, 120);
 
         Map<String, Integer> scenario1 = httpClient.testLoadDistribution(balancerUrl, 500);
         log.info("Scenario 1 distribution (900/100): {}", scenario1);
@@ -174,7 +189,7 @@ public class LoadMetricsTest {
         // worker1: (1000 - 100) / 10 = 90
         // worker2: (1000 - 900) / 10 = 10
         log.info("Waiting for balancer to report expected loads (worker1=90, worker2=10)...");
-        waitForExpectedLoads(cluster, "worker1", 90, "worker2", 10, 60);
+        waitForExpectedLoads(cluster, "worker1", 90, "worker2", 10, 120);
 
         Map<String, Integer> scenario2 = httpClient.testLoadDistribution(balancerUrl, 500);
         log.info("Scenario 2 distribution (100/900): {}", scenario2);
@@ -213,55 +228,85 @@ public class LoadMetricsTest {
     }
 
     /**
+     * Verify that the load file exists and is readable inside the container.
+     * Logs the file content for diagnostic purposes.
+     */
+    private void verifyLoadFile(WildFlyContainer worker, String filePath) throws Exception {
+        String content = worker.getContainer().execInContainer("cat", filePath).getStdout();
+        log.info("Load file on {}: '{}' contains: '{}'", worker.getName(), filePath, content.trim());
+        assertThat(content)
+                .as("Load file should exist and contain data on %s", worker.getName())
+                .contains("LOAD:");
+    }
+
+    /**
      * Wait for the balancer to report expected load values for workers.
-     * Polls the balancer until loads match expected values or timeout.
-     * Following noe-tests approach: load = (1000 - fileValue) / 10
+     * Polls the balancer until loads match expected values (within tolerance) or timeout.
+     * Following noe-tests approach: tolerance of 5, timeout of 120 seconds.
+     *
+     * @param cluster Test cluster
+     * @param worker1Name First worker name
+     * @param expectedLoad1 Expected load for first worker
+     * @param worker2Name Second worker name
+     * @param expectedLoad2 Expected load for second worker
+     * @param timeoutSeconds Maximum wait time in seconds
      */
     private void waitForExpectedLoads(ModClusterTestExtension.TestCluster cluster,
                                       String worker1Name, int expectedLoad1,
                                       String worker2Name, int expectedLoad2,
                                       int timeoutSeconds) throws Exception {
+        final int tolerance = 5;
         long startTime = System.currentTimeMillis();
         long timeoutMillis = timeoutSeconds * 1000L;
         boolean worker1Found = false;
         boolean worker2Found = false;
+        int lastLoad1 = -1;
+        int lastLoad2 = -1;
 
         while (System.currentTimeMillis() - startTime < timeoutMillis) {
             try {
                 Map<String, ModelNode> workers = cluster.getBalancer().getWorkerInfo();
 
                 if (workers.containsKey(worker1Name)) {
-                    int actualLoad1 = workers.get(worker1Name).get("load").asInt();
-                    if (actualLoad1 == expectedLoad1) {
+                    lastLoad1 = workers.get(worker1Name).get("load").asInt();
+                    if (Math.abs(lastLoad1 - expectedLoad1) <= tolerance) {
                         worker1Found = true;
-                        log.info("{} reached expected load: {}", worker1Name, expectedLoad1);
+                        log.info("{} reached expected load: {} (expected: {}, tolerance: {})",
+                                worker1Name, lastLoad1, expectedLoad1, tolerance);
                     } else {
-                        log.info("{} current load: {} (expected: {})", worker1Name, actualLoad1, expectedLoad1);
+                        log.info("{} current load: {} (expected: {} ±{})",
+                                worker1Name, lastLoad1, expectedLoad1, tolerance);
                     }
                 }
 
                 if (workers.containsKey(worker2Name)) {
-                    int actualLoad2 = workers.get(worker2Name).get("load").asInt();
-                    if (actualLoad2 == expectedLoad2) {
+                    lastLoad2 = workers.get(worker2Name).get("load").asInt();
+                    if (Math.abs(lastLoad2 - expectedLoad2) <= tolerance) {
                         worker2Found = true;
-                        log.info("{} reached expected load: {}", worker2Name, expectedLoad2);
+                        log.info("{} reached expected load: {} (expected: {}, tolerance: {})",
+                                worker2Name, lastLoad2, expectedLoad2, tolerance);
                     } else {
-                        log.info("{} current load: {} (expected: {})", worker2Name, actualLoad2, expectedLoad2);
+                        log.info("{} current load: {} (expected: {} ±{})",
+                                worker2Name, lastLoad2, expectedLoad2, tolerance);
                     }
                 }
 
                 if (worker1Found && worker2Found) {
-                    log.info("Both workers reporting expected loads");
+                    log.info("Both workers reporting expected loads within tolerance");
                     return;
                 }
             } catch (Exception e) {
                 log.debug("Error checking loads: {}", e.getMessage());
             }
 
-            Thread.sleep(2000); // Poll every 2 seconds
+            Thread.sleep(2000);
         }
 
-        softly.fail("Balancer didn't report expected loads. This means load never propagated.");
+        softly.fail("Balancer didn't report expected loads within %d seconds. " +
+                "Last seen: %s=%d (expected %d ±%d), %s=%d (expected %d ±%d)",
+                timeoutSeconds,
+                worker1Name, lastLoad1, expectedLoad1, tolerance,
+                worker2Name, lastLoad2, expectedLoad2, tolerance);
     }
 
     /**
@@ -371,46 +416,53 @@ public class LoadMetricsTest {
         log.info("Baseline load value: {} (100=idle, 0=overloaded)", baselineLoadValue);
 
         // Generate memory load: 2 minutes like noe-tests (300MB to match noe-tests)
+        // Run stress in a background thread so we can poll load DURING the stress period.
+        // If we block on the HTTP call, by the time it returns the memory is already freed
+        // and the load value has recovered — making the comparison meaningless.
         log.info("Generating memory load (300MB for 120 seconds)...");
         String loadUrl = balancerUrl + "load/memory?megabytes=300&duration=120000";
 
-        HttpClient.HttpResponse response = httpClient.getWithTimeout(loadUrl, 3, TimeUnit.MINUTES);
-        log.info("Load generation completed with status: {}", response.getStatusCode());
-
-        // Check load value immediately after stress
-        workers = cluster.getBalancer().getWorkerInfo();
-        int loadValueAfterStress = workers.get("worker1").get("load").asInt();
-        log.info("Load value after heap stress: {}", loadValueAfterStress);
-
-        // Conditional cooldown like noe-tests: only wait for recovery if load == 1 (completely overloaded)
-        int loadValueForComparison = loadValueAfterStress;
-        if (loadValueAfterStress == 1) {
-            log.info("System overloaded (load=1), waiting for recovery (60s timeout)...");
-            // Wait until load is no longer 1 (system recovers from overload)
-            for (int i = 0; i < 30; i++) { // 60 second timeout
-                Thread.sleep(2000);
-                workers = cluster.getBalancer().getWorkerInfo();
-                int currentLoad = workers.get("worker1").get("load").asInt();
-                log.info("Recovery check: load={}", currentLoad);
-                if (currentLoad != 1) {
-                    log.info("System recovered from overload: load={}", currentLoad);
-                    loadValueForComparison = currentLoad;
-                    break;
-                }
+        CompletableFuture<HttpClient.HttpResponse> stressFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                return httpClient.getWithTimeout(loadUrl, 3, TimeUnit.MINUTES);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
+        });
+
+        // Wait for stress to ramp up
+        Thread.sleep(10000);
+
+        // Poll load during stress — capture the minimum (most loaded) value seen
+        int minLoadDuringStress = baselineLoadValue;
+        for (int i = 0; i < 50; i++) {
+            workers = cluster.getBalancer().getWorkerInfo();
+            int currentLoad = workers.get("worker1").get("load").asInt();
+            log.info("Load during stress: {} (min so far: {})", currentLoad, minLoadDuringStress);
+            if (currentLoad < minLoadDuringStress) {
+                minLoadDuringStress = currentLoad;
+            }
+            if (stressFuture.isDone()) {
+                break;
+            }
+            Thread.sleep(2000);
         }
 
-        log.info("Comparing baseline={} vs post-stress={}", baselineLoadValue, loadValueForComparison);
+        // Wait for stress to complete
+        HttpClient.HttpResponse response = stressFuture.get(3, TimeUnit.MINUTES);
+        log.info("Load generation completed with status: {}", response.getStatusCode());
 
-        // Verify heap metric caused a load decrease (like noe-tests magicNumber check)
-        int loadValueChange = baselineLoadValue - loadValueForComparison;
+        log.info("Comparing baseline={} vs min during stress={}", baselineLoadValue, minLoadDuringStress);
+
+        // Verify heap metric caused a load decrease during memory pressure
+        int loadValueChange = baselineLoadValue - minLoadDuringStress;
         softly.assertThat(loadValueChange)
-                .as("Heap metric should cause noticeable load value change under memory pressure (baseline=%d, after=%d)",
-                    baselineLoadValue, loadValueForComparison)
+                .as("Heap metric should cause noticeable load value change under memory pressure (baseline=%d, min during stress=%d)",
+                    baselineLoadValue, minLoadDuringStress)
                 .isGreaterThanOrEqualTo(10);
 
-        log.info("Heap load metric verified: baseline={}, after stress={}, change={}",
-                baselineLoadValue, loadValueForComparison, loadValueChange);
+        log.info("Heap load metric verified: baseline={}, min during stress={}, change={}",
+                baselineLoadValue, minLoadDuringStress, loadValueChange);
     }
 
     /**

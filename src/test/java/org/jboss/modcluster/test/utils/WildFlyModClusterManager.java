@@ -126,6 +126,19 @@ public class WildFlyModClusterManager {
     }
 
     /**
+     * Set the session draining strategy on this worker's mod_cluster subsystem.
+     * Controls whether sessions are drained before stopping a context.
+     *
+     * @param strategy The strategy to use: "ALWAYS", "NEVER", or "DEFAULT"
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void setSessionDrainingStrategy(String strategy) throws IOException, OperationException {
+        writeModClusterAttribute("session-draining-strategy", strategy);
+        log.info("Set session-draining-strategy to '{}' on worker '{}'", strategy, container.getName());
+    }
+
+    /**
      * Disable a context on this worker. The context will reject new sessions
      * but continue serving existing sessions.
      *
