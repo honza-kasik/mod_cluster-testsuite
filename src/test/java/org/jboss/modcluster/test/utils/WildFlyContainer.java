@@ -535,6 +535,16 @@ public class WildFlyContainer {
     }
 
     /**
+     * Reload the server configuration and wait for management to be ready.
+     * Does not reconfigure static proxy or redeploy applications.
+     * Use this when the management model already contains the desired configuration
+     * (e.g., MCMP-over-SSL settings that must take effect via reload).
+     */
+    public void reloadServer() throws Exception {
+        reloadAndWait();
+    }
+
+    /**
      * Reload the server configuration (preserves changes, lighter than full restart).
      * Reconfigures static proxy and redeploys demo application after reload.
      */

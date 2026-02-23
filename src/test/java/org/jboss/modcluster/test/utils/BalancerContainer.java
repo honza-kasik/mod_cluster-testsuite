@@ -221,19 +221,7 @@ public abstract class BalancerContainer {
                     .assertSuccess("Failed to configure public interface");
                 log.info("Public interface configured to: {}", containerIp);
 
-                // Step 1: Create dedicated socket binding for MCMP (must not be wildcard 0.0.0.0)
-                Address mcmpSocketAddr =
-                    Address
-                        .of("socket-binding-group", "standard-sockets")
-                        .and("socket-binding", "modcluster-mcmp");
-
-                ops.add(mcmpSocketAddr,
-                    Values.of("port", HTTP_PORT)
-                        .and("interface", "public"))
-                    .assertSuccess("Failed to add MCMP socket binding");
-                log.info("MCMP socket binding created");
-
-                // Step 2: Create multicast socket binding for advertisement
+                // Step 1: Create multicast socket binding for advertisement
                 Address multicastAddr =
                     Address
                         .of("socket-binding-group", "standard-sockets")
@@ -246,14 +234,14 @@ public abstract class BalancerContainer {
                     .assertSuccess("Failed to add multicast socket binding");
                 log.info("Multicast socket binding created");
 
-                // Step 3: Add mod_cluster filter to undertow with dedicated MCMP socket
+                // Step 2: Add mod_cluster filter to undertow using standard HTTP socket
                 Address filterAddr =
                     Address.subsystem("undertow")
                         .and("configuration", "filter")
                         .and("mod-cluster", "modcluster");
 
                 ops.add(filterAddr,
-                    Values.of("management-socket-binding", "modcluster-mcmp")
+                    Values.of("management-socket-binding", "http")
                         .and("advertise-socket-binding", "modcluster")
                         .and("health-check-interval", 5)  // Check worker health every 5 seconds
                         .and("broken-node-timeout", 10)   // Mark as down after 10 seconds of no response
@@ -261,7 +249,7 @@ public abstract class BalancerContainer {
                     .assertSuccess("Failed to add mod_cluster filter");
                 log.info("Mod_cluster filter created with health checks and failover enabled");
 
-                // Step 4: Add filter-ref to default-host (following CLILib order)
+                // Step 3: Add filter-ref to default-host (following CLILib order)
                 Address filterRefAddr =
                     Address.subsystem("undertow")
                         .and("server", "default-server")
@@ -272,13 +260,13 @@ public abstract class BalancerContainer {
                     .assertSuccess("Failed to add filter-ref");
                 log.info("Filter-ref added to default-host");
 
-                // Step 5: Reload from admin-only mode to normal mode (like noe-tests stop/start)
+                // Step 4: Reload from admin-only mode to normal mode (like noe-tests stop/start)
                 log.info("Reloading server to transition from admin-only to normal mode");
                 new Administration(client).reload();
 
                 client.close();
 
-                log.info("Undertow balancer configured successfully. MCMP listening on port {} (modcluster-mcmp socket-binding)", HTTP_PORT);
+                log.info("Undertow balancer configured successfully. MCMP on HTTP socket binding (port {})", HTTP_PORT);
 
             } catch (Exception e) {
                 log.error("Failed to configure balancer", e);

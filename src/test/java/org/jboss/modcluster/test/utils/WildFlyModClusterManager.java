@@ -22,13 +22,34 @@ public class WildFlyModClusterManager {
 
     private final WildFlyContainer container;
 
+    private String mcmpListener = "default";
+    private int mcmpPort = 8080;
+    private String mcmpSslContext;
+
     public WildFlyModClusterManager(WildFlyContainer container) {
         this.container = container;
     }
 
     /**
+     * Configure MCMP channel to use SSL/TLS.
+     * Settings persist across reloads since {@link #configureStaticProxy()} uses these values.
+     *
+     * @param listener Undertow listener name ("default" for HTTP, "https" for HTTPS)
+     * @param port port for outbound-socket-binding to balancer
+     * @param sslContext Elytron client-ssl-context name for MCMP, or null for plain HTTP
+     */
+    public void setMcmpSslConfig(final String listener, final int port, final String sslContext) {
+        this.mcmpListener = listener;
+        this.mcmpPort = port;
+        this.mcmpSslContext = sslContext;
+        log.info("MCMP SSL config set: listener='{}', port={}, sslContext='{}' on worker '{}'",
+                listener, port, sslContext, container.getName());
+    }
+
+    /**
      * Configure static proxy connection to the balancer.
      * Creates an outbound-socket-binding and configures mod_cluster to use it.
+     * Uses configurable listener, port, and SSL context set via {@link #setMcmpSslConfig}.
      */
     public void configureStaticProxy() {
         try {
@@ -36,37 +57,54 @@ public class WildFlyModClusterManager {
             Operations ops = container.getOperations();
 
             // Step 1: Create outbound-socket-binding to balancer
-            log.info("Creating outbound-socket-binding for balancer");
+            log.info("Creating outbound-socket-binding for balancer (port={})", mcmpPort);
 
-            org.jboss.dmr.ModelNode addSocketBinding = new org.jboss.dmr.ModelNode();
-            org.jboss.dmr.ModelNode address = addSocketBinding.get("address");
+            Address socketBindingAddr = Address.of("socket-binding-group", "standard-sockets")
+                    .and("remote-destination-outbound-socket-binding", "modcluster-balancer");
+
+            ModelNode addSocketBinding = new ModelNode();
+            ModelNode address = addSocketBinding.get("address");
             address.add("socket-binding-group", "standard-sockets");
             address.add("remote-destination-outbound-socket-binding", "modcluster-balancer");
             addSocketBinding.get("operation").set("add");
             addSocketBinding.get("host").set("balancer");
-            addSocketBinding.get("port").set(8080);  // Undertow balancer listens for MCMP on HTTP port
+            addSocketBinding.get("port").set(mcmpPort);
 
-            org.jboss.dmr.ModelNode result = client.execute(addSocketBinding);
+            ModelNode result = client.execute(addSocketBinding);
             if (!result.get("outcome").asString().equals("success")) {
-                log.debug("Socket binding may already exist or failed: {}", result.get("failure-description").asString());
+                log.debug("Socket binding may already exist: {}", result.get("failure-description").asString());
+
+                // If it already exists and port differs from default, update it
+                if (mcmpPort != 8080) {
+                    ops.writeAttribute(socketBindingAddr, "port", mcmpPort).assertSuccess();
+                    log.info("Updated existing socket binding port to {}", mcmpPort);
+                }
             }
 
             // Step 2: Set proxy list to use the outbound-socket-binding
             Address mcProxyAddress = Address.subsystem("modcluster").and("proxy", "default");
-            org.jboss.dmr.ModelNode proxyList = new org.jboss.dmr.ModelNode();
+            ModelNode proxyList = new ModelNode();
             proxyList.add("modcluster-balancer");
 
             ModelNodeResult writeResult =
                 ops.writeAttribute(mcProxyAddress, "proxies", proxyList);
             writeResult.assertSuccess();
 
-            // Step 3: Set listener to "default" for HTTP communication with Undertow balancers
-            // (default listener attribute is "ajp" which is for Apache httpd)
+            // Step 3: Set listener for MCMP communication
             ModelNodeResult listenerResult =
-                ops.writeAttribute(mcProxyAddress, "listener", "default");
+                ops.writeAttribute(mcProxyAddress, "listener", mcmpListener);
             listenerResult.assertSuccess();
 
-            log.info("Mod_cluster static proxy configured successfully on worker '{}'", container.getName());
+            // Step 4: Set SSL context on mod_cluster proxy if configured
+            if (mcmpSslContext != null) {
+                ModelNodeResult sslResult =
+                    ops.writeAttribute(mcProxyAddress, "ssl-context", mcmpSslContext);
+                sslResult.assertSuccess();
+                log.info("MCMP SSL context set to '{}' on worker '{}'", mcmpSslContext, container.getName());
+            }
+
+            log.info("Mod_cluster static proxy configured successfully on worker '{}' (listener='{}', port={})",
+                    container.getName(), mcmpListener, mcmpPort);
 
             // Wait for the proxy connection to establish
             Thread.sleep(5000);
