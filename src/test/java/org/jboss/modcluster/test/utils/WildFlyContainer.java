@@ -144,20 +144,14 @@ public class WildFlyContainer {
             } catch (Exception e) {
                 lastException = e;
 
-                // Check if this is a SIGPIPE or socket-related error
-                final boolean isSigpipe = containsInExceptionChain(e, "SIGPIPE");
-                final boolean isSocketError = containsInExceptionChain(e, "Broken pipe") ||
-                                             containsInExceptionChain(e, "Connection reset") ||
-                                             containsInExceptionChain(e, "Socket closed");
-
-                if ((isSigpipe || isSocketError) && attempt < maxRetries) {
+                if (ContainerUtils.isTransientDockerError(e) && attempt < maxRetries) {
                     // Exponential backoff with jitter: 500ms, 1s, 1.5s + random(100-300ms)
                     final long baseDelay = attempt * 500L;
                     final long jitter = 100 + random.nextInt(200);
                     final long delayMs = baseDelay + jitter;
 
-                    log.warn("Container start failed with {} on attempt {}/{}, retrying after {}ms",
-                             isSigpipe ? "SIGPIPE" : "socket error", attempt, maxRetries, delayMs);
+                    log.warn("Container start failed with transient error on attempt {}/{}, retrying after {}ms",
+                             attempt, maxRetries, delayMs);
                     log.debug("Error details: {}", getRootCauseMessage(e));
 
                     // Clean up failed container reference
@@ -654,30 +648,6 @@ public class WildFlyContainer {
             String.format("grep -i '%s' /opt/wildfly/standalone/log/server.log || echo 'No matches found'", pattern)
         );
         return result.getStdout();
-    }
-
-    /**
-     * Check if any exception in the chain contains the specified text.
-     * Traverses the entire exception cause chain.
-     *
-     * @param throwable Exception to check
-     * @param text Text to search for
-     * @return true if text found in any exception message or toString()
-     */
-    private boolean containsInExceptionChain(Throwable throwable, String text) {
-        Throwable current = throwable;
-        while (current != null) {
-            // Check exception message
-            if (current.getMessage() != null && current.getMessage().contains(text)) {
-                return true;
-            }
-            // Check exception class name and toString()
-            if (current.toString().contains(text)) {
-                return true;
-            }
-            current = current.getCause();
-        }
-        return false;
     }
 
     /**

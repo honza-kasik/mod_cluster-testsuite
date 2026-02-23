@@ -8,8 +8,11 @@ import org.slf4j.LoggerFactory;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
+import java.io.InputStream;
+import java.security.KeyStore;
 import java.security.cert.X509Certificate;
 import java.util.HashMap;
 import java.util.Map;
@@ -24,6 +27,7 @@ public class HttpClient {
 
     private final OkHttpClient client;
     private final OkHttpClient insecureClient;
+    private OkHttpClient trustedClient;
 
     public HttpClient() {
         this.client = new OkHttpClient.Builder()
@@ -115,6 +119,106 @@ public class HttpClient {
             .build();
 
         try (Response response = insecureClient.newCall(request).execute()) {
+            return new HttpResponse(
+                    response.code(),
+                    response.body() != null ? response.body().string() : "",
+                    extractCookies(response),
+                    extractHeaders(response)
+            );
+        }
+    }
+
+    /**
+     * Configures certificate validation using a JKS trust store from the classpath.
+     * After calling this method, {@link #getHttpsTrusted(String)} and
+     * {@link #getHttpsTrustedWithSession(String, String)} will validate server certificates
+     * against the provided CA chain.
+     *
+     * <p>Hostname verification is relaxed because container hostnames are dynamic
+     * in test environments. Certificate chain validation is the important part.</p>
+     *
+     * @param classpathResource path to JKS trust store on classpath (e.g. "ssl/ca/intermediate/keystores/ca-chain.keystore.jks")
+     * @param password trust store password
+     */
+    public void configureTrustStore(final String classpathResource, final String password) {
+        try (InputStream trustStoreStream = Thread.currentThread().getContextClassLoader()
+                .getResourceAsStream(classpathResource)) {
+            if (trustStoreStream == null) {
+                throw new IllegalArgumentException("Trust store not found on classpath: " + classpathResource);
+            }
+
+            KeyStore trustStore = KeyStore.getInstance("JKS");
+            trustStore.load(trustStoreStream, password.toCharArray());
+
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(trustStore);
+
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, tmf.getTrustManagers(), new java.security.SecureRandom());
+
+            X509TrustManager trustManager = (X509TrustManager) tmf.getTrustManagers()[0];
+
+            this.trustedClient = new OkHttpClient.Builder()
+                    .sslSocketFactory(sslContext.getSocketFactory(), trustManager)
+                    .hostnameVerifier((hostname, session) -> true) // container hostnames are dynamic
+                    .connectTimeout(3, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
+                    .followRedirects(false)
+                    .build();
+
+            log.info("Trust store configured from classpath resource: {}", classpathResource);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to configure trust store from: " + classpathResource, e);
+        }
+    }
+
+    /**
+     * Perform an HTTPS GET request with certificate chain validation.
+     * Requires {@link #configureTrustStore(String, String)} to be called first.
+     *
+     * @param url HTTPS URL to request
+     * @return HTTP response
+     * @throws IOException if the request fails
+     * @throws IllegalStateException if trust store has not been configured
+     */
+    public HttpResponse getHttpsTrusted(final String url) throws IOException {
+        if (trustedClient == null) {
+            throw new IllegalStateException("Trust store not configured. Call configureTrustStore() first.");
+        }
+
+        Request request = new Request.Builder().url(url).build();
+
+        try (Response response = trustedClient.newCall(request).execute()) {
+            return new HttpResponse(
+                    response.code(),
+                    response.body() != null ? response.body().string() : "",
+                    extractCookies(response),
+                    extractHeaders(response)
+            );
+        }
+    }
+
+    /**
+     * Perform an HTTPS GET request with session cookie and certificate chain validation.
+     * Requires {@link #configureTrustStore(String, String)} to be called first.
+     *
+     * @param url HTTPS URL to request
+     * @param sessionCookie session cookie value (e.g. "JSESSIONID=abc123.worker1")
+     * @return HTTP response
+     * @throws IOException if the request fails
+     * @throws IllegalStateException if trust store has not been configured
+     */
+    public HttpResponse getHttpsTrustedWithSession(final String url, final String sessionCookie) throws IOException {
+        if (trustedClient == null) {
+            throw new IllegalStateException("Trust store not configured. Call configureTrustStore() first.");
+        }
+
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("Cookie", sessionCookie)
+                .build();
+
+        try (Response response = trustedClient.newCall(request).execute()) {
             return new HttpResponse(
                     response.code(),
                     response.body() != null ? response.body().string() : "",

@@ -111,9 +111,4 @@ public class LoadBalancingGroupFailoverTest {
                 .isGreaterThan(0);
     }
 
-    private String extractWorker(String body) {
-        if (body.contains("worker1")) return "worker1";
-        if (body.contains("worker2")) return "worker2";
-        return "unknown";
-    }
 }

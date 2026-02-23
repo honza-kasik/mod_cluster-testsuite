@@ -10,7 +10,6 @@ import org.wildfly.extras.creaper.core.online.operations.Operations;
 import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
 import org.wildfly.extras.creaper.core.online.operations.Values;
 
-import java.io.File;
 import java.util.Random;
 
 /**
@@ -25,46 +24,6 @@ public class WildFlyLoadMetricsManager {
 
     public WildFlyLoadMetricsManager(WildFlyContainer container) {
         this.container = container;
-    }
-
-    /**
-     * Deploy custom load metric module to WildFly.
-     * Copies JAR and module.xml to the modules directory.
-     *
-     * @throws Exception if deployment fails
-     */
-    public void deployCustomLoadMetric() throws Exception {
-        log.info("Deploying custom load metric to worker '{}'", container.getName());
-
-        // Copy JAR file
-        File jarFile = new File("src/test/resources/custom-load-metric/target/custom-load-metric.jar");
-        if (!jarFile.exists()) {
-            throw new IllegalStateException("Custom load metric JAR not found. Run: mvn -f src/test/resources/custom-load-metric/pom.xml clean package");
-        }
-
-        // Copy module.xml
-        File moduleXml = new File("src/test/resources/custom-load-metric/module.xml");
-        if (!moduleXml.exists()) {
-            throw new IllegalStateException("Custom load metric module.xml not found at: " + moduleXml.getAbsolutePath());
-        }
-
-        String modulePath = "/opt/wildfly/modules/org/jboss/modcluster/test/metric/main/";
-
-        // Create module directory
-        container.getContainer().execInContainer("mkdir", "-p", modulePath);
-
-        // Copy files to container
-        container.getContainer().copyFileToContainer(
-                org.testcontainers.utility.MountableFile.forHostPath(jarFile.toPath()),
-                modulePath + "custom-load-metric.jar"
-        );
-
-        container.getContainer().copyFileToContainer(
-                org.testcontainers.utility.MountableFile.forHostPath(moduleXml.toPath()),
-                modulePath + "module.xml"
-        );
-
-        log.info("Custom load metric module deployed to worker '{}'", container.getName());
     }
 
     /**
@@ -209,7 +168,7 @@ public class WildFlyLoadMetricsManager {
             } catch (Exception e) {
                 lastException = e;
 
-                if (isTransientDockerError(e) && attempt < maxRetries) {
+                if (ContainerUtils.isTransientDockerError(e) && attempt < maxRetries) {
                     final long delayMs = attempt * 500L + random.nextInt(300);
                     log.warn("writeLoadValue failed with transient error on attempt {}/{}, retrying after {}ms: {}",
                             attempt, maxRetries, delayMs, getRootCauseMessage(e));
@@ -300,27 +259,6 @@ public class WildFlyLoadMetricsManager {
         log.info("Fixed load {} configured on worker '{}'", loadValue, container.getName());
     }
 
-    /**
-     * Check if an exception represents a transient Docker/Podman socket error (SIGPIPE, broken pipe).
-     *
-     * @param throwable Exception to check
-     * @return true if this is a transient socket error that may succeed on retry
-     */
-    private boolean isTransientDockerError(Throwable throwable) {
-        Throwable current = throwable;
-        while (current != null) {
-            final String message = current.getMessage();
-            if (message != null && (message.contains("SIGPIPE")
-                    || message.contains("Broken pipe")
-                    || message.contains("přerušena")
-                    || message.contains("Connection reset")
-                    || message.contains("Socket closed"))) {
-                return true;
-            }
-            current = current.getCause();
-        }
-        return false;
-    }
 
     /**
      * Get the root cause message from an exception chain.

@@ -50,31 +50,4 @@ public class UndertowSessionCookieConfigurator {
 
         log.info("Session cookie name '{}' configured on worker '{}'", cookieName, worker.getName());
     }
-
-    /**
-     * Resets session cookie configuration to default on the specified worker.
-     * Removes the session-cookie setting to restore default behavior (JSESSIONID).
-     *
-     * @param worker Container to reset
-     * @throws Exception if reset fails
-     */
-    public void resetToDefault(final WildFlyContainer worker) throws Exception {
-        log.info("Resetting session cookie configuration to default on worker '{}'", worker.getName());
-
-        final Operations ops = worker.getOperations();
-        final Address sessionCookieAddr = Address.subsystem("undertow")
-            .and("servlet-container", "default")
-            .and("setting", "session-cookie");
-
-        // Remove session-cookie setting if it exists
-        if (ops.exists(sessionCookieAddr)) {
-            ops.remove(sessionCookieAddr).assertSuccess();
-            log.debug("Removed custom session-cookie configuration");
-        }
-
-        // Reload to apply changes
-        worker.reload();
-
-        log.info("Session cookie configuration reset to default on worker '{}'", worker.getName());
-    }
 }

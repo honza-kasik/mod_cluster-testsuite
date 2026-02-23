@@ -69,42 +69,6 @@ public class WildFlyDeploymentManager {
     }
 
     /**
-     * Deploy an application using filesystem deployment (alternative method).
-     *
-     * @param deploymentFile The deployment file to deploy
-     * @throws Exception if deployment fails
-     */
-    public void deployViaFilesystem(File deploymentFile) throws Exception {
-        log.info("Deploying {} to worker '{}' via filesystem", deploymentFile.getName(), container.getName());
-
-        container.getContainer().copyFileToContainer(
-                org.testcontainers.utility.MountableFile.forHostPath(deploymentFile.toPath()),
-                "/opt/wildfly/standalone/deployments/" + deploymentFile.getName()
-        );
-
-        // Wait for deployment (check for .deployed marker)
-        String deploymentName = deploymentFile.getName();
-        int maxWait = 30; // seconds
-        for (int i = 0; i < maxWait; i++) {
-            try {
-                Container.ExecResult result = container.getContainer().execInContainer(
-                        "sh", "-c",
-                        "ls /opt/wildfly/standalone/deployments/" + deploymentName + ".deployed 2>/dev/null"
-                );
-                if (result.getExitCode() == 0) {
-                    log.info("Deployment {} succeeded on worker '{}'", deploymentName, container.getName());
-                    return;
-                }
-            } catch (Exception e) {
-                // Ignore, keep waiting
-            }
-            Thread.sleep(1000);
-        }
-
-        log.warn("Deployment {} may not have completed on worker '{}' (timeout)", deploymentName, container.getName());
-    }
-
-    /**
      * Undeploy an application from this worker using Creaper.
      *
      * @param deploymentName The name of the deployment to undeploy
