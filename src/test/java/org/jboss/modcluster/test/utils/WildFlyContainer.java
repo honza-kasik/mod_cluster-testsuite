@@ -131,13 +131,7 @@ public class WildFlyContainer {
                 // Configure JGroups TCP for container-based clustering
                 // (UDP multicast discovery does not work in Docker/Podman networks)
                 jgroups().configureTcpDiscovery();
-                reloadAndWait();
-
-                // Configure static proxy connection
-                modCluster().configureStaticProxy();
-
-                // Deploy demo application automatically
-                deployment().deployDemoApp();
+                reload();
 
                 return; // Success - exit retry loop
 
@@ -505,43 +499,24 @@ public class WildFlyContainer {
 
     /**
      * Reload the server configuration and wait for management to be ready.
-     * Does not reconfigure proxy or redeploy applications.
-     */
-    private void reloadAndWait() throws Exception {
-        log.info("Reloading worker '{}'", name);
-
-        OnlineManagementClient client = getManagementClient();
-
-        // Execute reload operation
-        ModelNode reloadOp = new ModelNode();
-        reloadOp.get("operation").set("reload");
-        reloadOp.get("blocking").set(false); // Don't block waiting
-
-        ModelNode result = client.execute(reloadOp);
-        if (!"success".equals(result.get("outcome").asString())) {
-            throw new RuntimeException("Reload failed: " + result.get("failure-description").asString());
-        }
-
-        // Close and nullify client as server is reloading
-        client.close();
-        managementClient = null;
-
-        log.info("Reload initiated, waiting for server to come back up...");
-
-        // Wait for server to come back up
-        waitForManagementReady();
-
-        log.info("Worker '{}' reloaded successfully", name);
-    }
-
-    /**
-     * Reload the server configuration and wait for management to be ready.
      * Does not reconfigure static proxy or redeploy applications.
      * Use this when the management model already contains the desired configuration
      * (e.g., MCMP-over-SSL settings that must take effect via reload).
      */
     public void reloadServer() throws Exception {
-        reloadAndWait();
+        log.info("Reloading worker '{}'", name);
+
+        // Invalidate cached client — reload drops the connection
+        if (managementClient != null) {
+            try {
+                managementClient.close();
+            } catch (IOException ignored) {
+            }
+            managementClient = null;
+        }
+
+        getAdministration().reload();
+        log.info("Worker '{}' reloaded successfully", name);
     }
 
     /**
@@ -549,36 +524,9 @@ public class WildFlyContainer {
      * Reconfigures static proxy and redeploys demo application after reload.
      */
     public void reload() throws Exception {
-        reloadAndWait();
-
-        // Reconfigure static proxy and redeploy demo after reload
+        reloadServer();
         modCluster().configureStaticProxy();
         deployment().deployDemoApp();
-    }
-
-
-    /**
-     * Wait for management interface to be ready by polling.
-     */
-    private void waitForManagementReady() throws Exception {
-        int maxAttempts = 60;
-        for (int i = 0; i < maxAttempts; i++) {
-            try {
-                OnlineManagementClient client = getManagementClient();
-                // Try a simple operation
-                ModelNode result = client.execute(":read-attribute(name=server-state)");
-                if (result.get("outcome").asString().equals("success")) {
-                    log.info("Management interface ready for worker '{}'", name);
-                    // Give it a bit more time to be fully stable
-                    Thread.sleep(2000);
-                    return;
-                }
-            } catch (Exception e) {
-                // Not ready yet, wait and retry
-            }
-            Thread.sleep(1000);
-        }
-        throw new RuntimeException("Management interface not ready after " + maxAttempts + " seconds");
     }
 
     /**
