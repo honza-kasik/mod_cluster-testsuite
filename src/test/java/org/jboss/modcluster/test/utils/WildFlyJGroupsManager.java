@@ -19,7 +19,7 @@ public class WildFlyJGroupsManager {
 
     private final WildFlyContainer container;
 
-    public WildFlyJGroupsManager(final WildFlyContainer container) {
+    WildFlyJGroupsManager(final WildFlyContainer container) {
         this.container = container;
     }
 

@@ -26,7 +26,7 @@ public class WildFlyModClusterManager {
     private int mcmpPort = 8080;
     private String mcmpSslContext;
 
-    public WildFlyModClusterManager(WildFlyContainer container) {
+    WildFlyModClusterManager(WildFlyContainer container) {
         this.container = container;
     }
 

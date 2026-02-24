@@ -530,45 +530,6 @@ public class WildFlyContainer {
     }
 
     /**
-     * Wait for worker to be accessible via the balancer.
-     * Polls the balancer URL until the worker responds or timeout is reached.
-     *
-     * @param balancerUrl The balancer URL to test
-     * @param timeoutSeconds Maximum time to wait
-     * @return true if worker became accessible, false if timeout
-     */
-    public boolean waitForRegistration(String balancerUrl, int timeoutSeconds) throws Exception {
-        log.info("Waiting for worker '{}' to be accessible via balancer: {}", name, balancerUrl);
-
-        long startTime = System.currentTimeMillis();
-        long timeoutMillis = timeoutSeconds * 1000L;
-
-        while (System.currentTimeMillis() - startTime < timeoutMillis) {
-            try {
-                // Try to access via balancer
-                Container.ExecResult execResult = container.execInContainer(
-                    "sh", "-c",
-                    String.format("curl -s -o /dev/null -w '%%{http_code}' '%s' 2>/dev/null || echo 000", balancerUrl)
-                );
-
-                String httpCode = execResult.getStdout().trim();
-                if ("200".equals(httpCode)) {
-                    log.info("Worker '{}' is accessible via balancer", name);
-                    return true;
-                }
-
-                Thread.sleep(1000);
-            } catch (Exception e) {
-                // Continue waiting
-                Thread.sleep(1000);
-            }
-        }
-
-        log.warn("Worker '{}' not accessible via balancer after {} seconds", name, timeoutSeconds);
-        return false;
-    }
-
-    /**
      * Get the last N lines from the WildFly server log.
      *
      * @param lines Number of lines to retrieve

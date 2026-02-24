@@ -2,7 +2,6 @@ package org.jboss.modcluster.test.utils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.testcontainers.containers.Container;
 import org.wildfly.extras.creaper.core.online.OnlineManagementClient;
 import org.wildfly.extras.creaper.core.online.ModelNodeResult;
 import org.wildfly.extras.creaper.core.online.operations.Address;
@@ -25,7 +24,7 @@ public class WildFlyDeploymentManager {
 
     private final WildFlyContainer container;
 
-    public WildFlyDeploymentManager(WildFlyContainer container) {
+    WildFlyDeploymentManager(WildFlyContainer container) {
         this.container = container;
     }
 

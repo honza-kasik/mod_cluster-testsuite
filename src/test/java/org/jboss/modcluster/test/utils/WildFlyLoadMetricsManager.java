@@ -22,7 +22,7 @@ public class WildFlyLoadMetricsManager {
 
     private final WildFlyContainer container;
 
-    public WildFlyLoadMetricsManager(WildFlyContainer container) {
+    WildFlyLoadMetricsManager(WildFlyContainer container) {
         this.container = container;
     }
 

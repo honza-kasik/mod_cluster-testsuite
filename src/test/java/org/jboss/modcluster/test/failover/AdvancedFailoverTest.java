@@ -165,10 +165,10 @@ public class AdvancedFailoverTest {
         // Undeploy the app from the worker holding the session
         if ("worker1".equals(initialWorker)) {
             log.info("Undeploying demo.war from worker1 (session holder)...");
-            new org.jboss.modcluster.test.utils.WildFlyDeploymentManager(cluster.getWorker1()).undeploy("demo.war");
+            cluster.getWorker1().deployment().undeploy("demo.war");
         } else {
             log.info("Undeploying demo.war from worker2 (session holder)...");
-            new org.jboss.modcluster.test.utils.WildFlyDeploymentManager(cluster.getWorker2()).undeploy("demo.war");
+            cluster.getWorker2().deployment().undeploy("demo.war");
         }
 
         // Wait for failover and verify session still works
