@@ -160,6 +160,21 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Jakarta WebSocket API - for compiling WebSocket endpoint classes -->
+        <dependency>
+            <groupId>jakarta.websocket</groupId>
+            <artifactId>jakarta.websocket-client-api</artifactId>
+            <version>2.1.1</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>jakarta.websocket</groupId>
+            <artifactId>jakarta.websocket-api</artifactId>
+            <version>2.1.1</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- ShrinkWrap for dynamic WAR creation -->
         <dependency>
             <groupId>org.jboss.shrinkwrap</groupId>

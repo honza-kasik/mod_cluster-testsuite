@@ -54,7 +54,7 @@ A minimal application used **only** to:
 - ✅ Enable session affinity testing
 - ❌ NOT the focus of testing
 
-##Writing New Tests
+## Writing New Tests
 
 ### Test Template
 

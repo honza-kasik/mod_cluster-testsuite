@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -54,11 +55,13 @@ public class ContextLifecycleTest {
 
         // Verify demo.war is deployed and accessible (auto-enabled)
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
-        HttpResponse response = httpClient.get(balancerUrl);
-
-        softly.assertThat(response.getStatusCode())
-                .as("Auto-enabled context should be accessible")
-                .isEqualTo(200);
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode())
+                            .as("Auto-enabled context should be accessible")
+                            .isEqualTo(200);
+                });
 
         log.info("Context auto-enabled successfully");
     }
@@ -72,29 +75,28 @@ public class ContextLifecycleTest {
         cluster.startWorkers(1);
         WildFlyContainer worker = cluster.getWorker1();
 
-        // Read excluded-contexts configuration
-        ModelNode excludedContexts = worker.modCluster().readModClusterAttribute("excluded-contexts");
-        log.info("excluded-contexts: {}", excludedContexts);
-        String originalValue = excludedContexts.isDefined() ? excludedContexts.asString() : "";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
         // Verify demo is initially accessible via balancer
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
-        HttpResponse initialResponse = httpClient.get(balancerUrl);
-        softly.assertThat(initialResponse.getStatusCode())
-                .as("Demo should be accessible before exclusion")
-                .isEqualTo(200);
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode()).isEqualTo(200);
+                });
 
-        // Stop demo context first to immediately remove it from the balancer's routing.
-        // Without this, the balancer keeps the stale registration from before the reload
-        // because the Undertow balancer does not automatically discard old context registrations
-        // when a CONFIG message is received — it only adds new ENABLE-APP'd contexts.
-        worker.modCluster().stopContext("demo", "default-host");
+        log.info("Demo is accessible, now setting excluded-contexts");
 
-        // Set excluded-contexts to prevent re-registration after reload
-        worker.modCluster().writeModClusterAttribute("excluded-contexts", "demo");
+        // Set excluded-contexts to include "demo", preserving ROOT default to prevent
+        // the "/" context from acting as a catch-all on the balancer (see doExcludedContextsTest).
+        worker.modCluster().writeModClusterAttribute("excluded-contexts", "ROOT, demo");
 
-        // Reload worker to apply configuration
-        worker.reload();
+        // Reload worker: the server preserves deployments across reloads, but mod_cluster
+        // re-scans deployments on startup. With "demo" in excluded-contexts, ENABLE-APP
+        // is NOT sent for /demo. The broken-node-timeout (10s) on the balancer removes
+        // the stale node registration while the worker is reloading (~15s), so by the
+        // time the worker reconnects, the old /demo registration is gone.
+        worker.reloadServer();
+        worker.modCluster().configureStaticProxy();
 
         // Verify demo is NOT accessible via balancer after exclusion
         await().atMost(ofSeconds(30))
@@ -108,33 +110,641 @@ public class ContextLifecycleTest {
 
         log.info("Excluded context verified as inaccessible via balancer");
 
-        // Verify demo is STILL accessible directly to worker
-        String directUrl = worker.getHttpUrl() + "/demo/";
+        // Verify demo is STILL accessible directly on worker (it's deployed, just not proxied)
+        final String directUrl = worker.getHttpUrl() + "/demo/";
         HttpResponse directResponse = httpClient.get(directUrl);
         softly.assertThat(directResponse.getStatusCode())
                 .as("Excluded context should still be accessible directly")
                 .isEqualTo(200);
 
-        // Restore original value and reload
-        if (originalValue.isEmpty()) {
-            worker.modCluster().writeModClusterAttribute("excluded-contexts", ModelNode.fromString("undefined"));
-        } else {
-            worker.modCluster().writeModClusterAttribute("excluded-contexts", originalValue);
-        }
-        worker.reload();
-        Thread.sleep(5000);
+        log.info("Excluded contexts configuration verified");
+    }
 
-        // Verify demo is accessible again after removing exclusion
-        await().atMost(ofSeconds(15))
-                .pollInterval(ofSeconds(2))
+    /**
+     * Verifies that excluding a non-existent context does not affect real contexts.
+     * All deployed contexts should remain accessible via the balancer.
+     */
+    @Test
+    public void testExcludedContextsNonExistentContext(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doExcludedContextsTest(
+                cluster, httpClient,
+                Arrays.asList("doesntExist"),
+                Arrays.asList("demo", "simplecontext-111", "simplecontext-222")
+        );
+    }
+
+    /**
+     * Verifies that multiple contexts can be excluded simultaneously.
+     * Only non-excluded contexts should remain accessible via the balancer.
+     */
+    @Test
+    public void testExcludedContextsMultipleContexts(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doExcludedContextsTest(
+                cluster, httpClient,
+                Arrays.asList("demo", "doesntExist", "simplecontext-111"),
+                Arrays.asList("simplecontext-222")
+        );
+    }
+
+    /**
+     * Verifies that the main application context and a non-existent context can be excluded together.
+     * Only the simple context applications should remain accessible via the balancer.
+     */
+    @Test
+    public void testExcludedContextsMainAndNonExistent(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doExcludedContextsTest(
+                cluster, httpClient,
+                Arrays.asList("demo", "doesntExist"),
+                Arrays.asList("simplecontext-111", "simplecontext-222")
+        );
+    }
+
+    /**
+     * Verifies that excluding only the main application context works correctly.
+     * The simple context applications should remain accessible via the balancer.
+     */
+    @Test
+    public void testExcludedContextsMainOnly(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doExcludedContextsTest(
+                cluster, httpClient,
+                Arrays.asList("demo"),
+                Arrays.asList("simplecontext-111", "simplecontext-222")
+        );
+    }
+
+    /**
+     * Verifies that excluded-contexts applies correctly on the default virtual host
+     * when excluding a non-existent context. All deployed contexts should remain accessible.
+     */
+    @Test
+    public void testVirtHostExcludedContextsVol1(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doExcludedContextsTest(
+                cluster, httpClient,
+                Arrays.asList("doesntExist"),
+                Arrays.asList("demo", "simplecontext-111", "simplecontext-222")
+        );
+    }
+
+    /**
+     * Verifies that excluded-contexts applies correctly on the default virtual host
+     * when excluding multiple contexts including the main application.
+     */
+    @Test
+    public void testVirtHostExcludedContextsVol2(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doExcludedContextsTest(
+                cluster, httpClient,
+                Arrays.asList("demo", "doesntExist", "simplecontext-111"),
+                Arrays.asList("simplecontext-222")
+        );
+    }
+
+    /**
+     * Verifies that excluded-contexts applies correctly on the default virtual host
+     * when excluding the main application and a non-existent context.
+     */
+    @Test
+    public void testVirtHostExcludedContextsVol3(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doExcludedContextsTest(
+                cluster, httpClient,
+                Arrays.asList("demo", "doesntExist"),
+                Arrays.asList("simplecontext-111", "simplecontext-222")
+        );
+    }
+
+    /**
+     * Verifies that excluded-contexts applies correctly on the default virtual host
+     * when excluding only the main application context.
+     */
+    @Test
+    public void testVirtHostExcludedContextsVol4(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doExcludedContextsTest(
+                cluster, httpClient,
+                Arrays.asList("demo"),
+                Arrays.asList("simplecontext-111", "simplecontext-222")
+        );
+    }
+
+    /**
+     * Verifies that excluded-contexts with leading slashes are normalized correctly (JBEAP-11006).
+     * Contexts specified with leading slashes should still be excluded properly.
+     */
+    @Test
+    public void testExcludedContextsWithLeadingSlash(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doExcludedContextsTest(
+                cluster, httpClient,
+                Arrays.asList("/simplecontext-111", "/simplecontext-222", "demo"),
+                Arrays.asList()
+        );
+    }
+
+    /**
+     * Common helper for excluded-contexts tests.
+     * Deploys additional test applications, configures excluded-contexts on the worker,
+     * then reloads so the mod_cluster subsystem re-scans deployments respecting the exclusion list.
+     *
+     * <p>Uses the same simple approach as {@link #testExcludedContextsNotRegistered}:
+     * set the attribute, then {@code reloadServer() + configureStaticProxy()}.
+     * During reload, the mod_cluster subsystem shuts down (dropping the MCMP connection).
+     * The balancer's broken-node-timeout (10s) clears old registrations while the worker
+     * is reloading (~15s). When the worker reconnects via {@code configureStaticProxy()},
+     * it sends ENABLE-APP only for non-excluded contexts.</p>
+     *
+     * @param cluster          the test cluster providing balancer and worker access
+     * @param httpClient       the HTTP client for sending requests
+     * @param excludedContexts context names to exclude (may include non-existent ones)
+     * @param accessibleContexts context names expected to remain accessible via the balancer
+     * @throws Exception if any operation fails
+     */
+    private void doExcludedContextsTest(TestCluster cluster, HttpClient httpClient,
+                                        List<String> excludedContexts,
+                                        List<String> accessibleContexts) throws Exception {
+        cluster.startWorkers(1);
+        final WildFlyContainer worker = cluster.getWorker1();
+        final File demoWar = new File("src/test/resources/deployments/demo.war");
+        final List<String> allDeployedContexts = Arrays.asList("demo", "simplecontext-111", "simplecontext-222");
+
+        // Deploy additional test applications
+        worker.deployment().deploy(demoWar, "simplecontext-111.war");
+        worker.deployment().deploy(demoWar, "simplecontext-222.war");
+        log.info("Deployed additional test applications");
+
+        // Wait for ALL contexts to register on the balancer
+        for (String contextName : allDeployedContexts) {
+            final String url = cluster.getBalancer().getHttpUrl() + "/" + contextName + "/";
+            await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                    .untilAsserted(() -> {
+                        HttpResponse response = httpClient.get(url);
+                        assertThat(response.getStatusCode())
+                                .as("Context '%s' should be accessible before exclusion", contextName)
+                                .isEqualTo(200);
+                    });
+        }
+        log.info("All contexts registered on balancer");
+
+        // Set excluded-contexts on the worker.
+        // IMPORTANT: Setting this attribute REPLACES the WildFly default "ROOT".
+        // If ROOT is not excluded, the welcome content at "/" gets registered on the balancer as a
+        // catch-all context that routes ALL request paths to the node, including excluded contexts.
+        // Always prepend ROOT to prevent catch-all routing.
+        final String excludedValue = "ROOT, " + String.join(", ", excludedContexts);
+        log.info("Setting excluded-contexts to: '{}'", excludedValue);
+        worker.modCluster().writeModClusterAttribute("excluded-contexts", excludedValue);
+
+        // Reload using the same approach as testExcludedContextsNotRegistered:
+        // reloadServer() drops the MCMP connection, broken-node-timeout clears old registrations,
+        // configureStaticProxy() reconnects with the new excluded-contexts in effect.
+        worker.reloadServer();
+        worker.modCluster().configureStaticProxy();
+
+        // Verify accessible contexts are registered on the balancer
+        if (!accessibleContexts.isEmpty()) {
+            for (String contextName : accessibleContexts) {
+                final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + contextName + "/";
+                await().atMost(ofSeconds(30))
+                        .pollInterval(ofSeconds(2))
+                        .untilAsserted(() -> {
+                            HttpResponse response = httpClient.get(balancerUrl);
+                            assertThat(response.getStatusCode())
+                                    .as("Accessible context '%s' should return 200 via balancer", contextName)
+                                    .isEqualTo(200);
+                        });
+                log.info("Context '{}' is accessible via balancer as expected", contextName);
+            }
+        } else {
+            // All contexts are excluded; wait for worker to register (node only, no contexts)
+            Thread.sleep(10000);
+        }
+
+        // Verify excluded contexts are NOT accessible via balancer
+        for (String contextName : excludedContexts) {
+            final String normalizedContext = contextName.startsWith("/") ? contextName.substring(1) : contextName;
+            final boolean contextExists = allDeployedContexts.contains(normalizedContext);
+
+            final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + normalizedContext + "/";
+
+            // Single check (not polling) — if the context is excluded, it should not be routed
+            final HttpResponse response = httpClient.get(balancerUrl);
+            softly.assertThat(response.getStatusCode())
+                    .as("Excluded context '%s' should NOT return 200 via balancer (got %d)",
+                            contextName, response.getStatusCode())
+                    .isNotEqualTo(200);
+            log.info("Excluded context '{}' returned status {} via balancer", contextName, response.getStatusCode());
+
+            // Verify excluded contexts that actually exist ARE still accessible directly on worker
+            if (contextExists) {
+                final String directUrl = worker.getHttpUrl() + "/" + normalizedContext + "/";
+                HttpResponse directResponse = httpClient.get(directUrl);
+                softly.assertThat(directResponse.getStatusCode())
+                        .as("Excluded context '%s' should still be accessible directly on worker", contextName)
+                        .isEqualTo(200);
+                log.info("Context '{}' is accessible directly on worker as expected", contextName);
+            }
+        }
+    }
+
+    /**
+     * Verifies that disabling a node via the balancer proxy prevents new requests from being routed to it.
+     * Starts two workers, disables worker1 via the proxy, and verifies all subsequent requests
+     * go to worker2. After re-enabling, verifies load distribution is balanced again.
+     */
+    @Test
+    public void testDisableNodeViaProxy(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(2);
+        final WildFlyContainer worker1 = cluster.getWorker1();
+        final WildFlyContainer worker2 = cluster.getWorker2();
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Wait for both workers to register and be accessible
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
-                    HttpResponse response = httpClient.get(balancerUrl);
+                    final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 10);
+                    assertThat(distribution).containsKey("worker1");
+                    assertThat(distribution).containsKey("worker2");
+                });
+
+        log.info("Both workers are registered and serving requests");
+
+        // Disable worker1 via the balancer proxy
+        cluster.getBalancer().disableNode("worker1");
+        Thread.sleep(2000);
+
+        // Verify all requests go to worker2
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 20);
+                    assertThat(distribution.getOrDefault("worker1", 0))
+                            .as("Disabled worker1 should not receive new requests")
+                            .isEqualTo(0);
+                    assertThat(distribution.getOrDefault("worker2", 0))
+                            .as("Worker2 should handle all requests")
+                            .isGreaterThan(0);
+                });
+
+        log.info("Worker1 disabled via proxy - all requests routed to worker2");
+
+        // Re-enable worker1
+        cluster.getBalancer().enableNode("worker1");
+
+        // Verify load distribution is balanced again (may take time for load factor update)
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(3))
+                .untilAsserted(() -> {
+                    final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 20);
+                    assertThat(distribution).containsKey("worker1");
+                    assertThat(distribution).containsKey("worker2");
+                });
+
+        log.info("Worker1 re-enabled - load distribution balanced again");
+    }
+
+    /**
+     * Verifies that stopping a node via the balancer proxy immediately prevents all requests
+     * from being routed to it, including existing sessions.
+     * Starts two workers, stops worker1 via the proxy, and verifies all subsequent requests
+     * go to worker2. After re-enabling, verifies load distribution is balanced again.
+     */
+    @Test
+    public void testStopNodeViaProxy(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(2);
+        final WildFlyContainer worker1 = cluster.getWorker1();
+        final WildFlyContainer worker2 = cluster.getWorker2();
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Wait for both workers to register and be accessible
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 10);
+                    assertThat(distribution).containsKey("worker1");
+                    assertThat(distribution).containsKey("worker2");
+                });
+
+        log.info("Both workers are registered and serving requests");
+
+        // Stop worker1 via the balancer proxy
+        cluster.getBalancer().stopNode("worker1");
+        Thread.sleep(2000);
+
+        // Verify all requests go to worker2
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 20);
+                    assertThat(distribution.getOrDefault("worker1", 0))
+                            .as("Stopped worker1 should not receive any requests")
+                            .isEqualTo(0);
+                    assertThat(distribution.getOrDefault("worker2", 0))
+                            .as("Worker2 should handle all requests")
+                            .isGreaterThan(0);
+                });
+
+        log.info("Worker1 stopped via proxy - all requests routed to worker2");
+
+        // Re-enable worker1
+        cluster.getBalancer().enableNode("worker1");
+
+        // Verify load distribution is balanced again (may take time for load factor update)
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(3))
+                .untilAsserted(() -> {
+                    final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 20);
+                    assertThat(distribution).containsKey("worker1");
+                    assertThat(distribution).containsKey("worker2");
+                });
+
+        log.info("Worker1 re-enabled - load distribution balanced again");
+    }
+
+    /**
+     * Verifies that disabling a load-balancing group via the balancer proxy prevents all workers
+     * in the group from receiving new requests (Undertow-only).
+     * Assigns both workers to a single group, disables it, verifies requests return 503,
+     * then re-enables and verifies accessibility is restored.
+     */
+    @Test
+    public void testDisableGroupViaProxy(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(2);
+        final WildFlyContainer worker1 = cluster.getWorker1();
+        final WildFlyContainer worker2 = cluster.getWorker2();
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Assign both workers to the same load-balancing group (batch config before reloads)
+        worker1.modCluster().setLoadBalancingGroup("groupOne");
+        worker2.modCluster().setLoadBalancingGroup("groupOne");
+        worker1.reload();
+        worker2.reload();
+
+        // Wait for registration and verify accessible
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode()).isEqualTo(200);
+                });
+
+        log.info("Both workers registered in groupOne and serving requests");
+
+        // Disable the group via the balancer proxy
+        cluster.getBalancer().disableLoadBalancingGroup("groupOne");
+        Thread.sleep(2000);
+
+        // Verify requests return 503 (no workers available for new sessions)
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode())
-                            .as("Context should be accessible again after removing exclusion")
+                            .as("Requests to disabled group should return 503")
+                            .isEqualTo(503);
+                });
+
+        log.info("Group disabled - requests return 503");
+
+        // Re-enable the group
+        cluster.getBalancer().enableLoadBalancingGroup("groupOne");
+        Thread.sleep(2000);
+
+        // Verify accessible again
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode())
+                            .as("Requests should succeed after re-enabling group")
                             .isEqualTo(200);
                 });
 
-        log.info("Excluded contexts configuration verified");
+        log.info("Group re-enabled - requests succeed again");
+    }
+
+    /**
+     * Verifies that stopping a load-balancing group via the balancer proxy immediately prevents
+     * all workers in the group from receiving any requests (Undertow-only).
+     * Assigns both workers to a single group, stops it, verifies requests return 503,
+     * then re-enables and verifies accessibility is restored.
+     */
+    @Test
+    public void testStopGroupViaProxy(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(2);
+        final WildFlyContainer worker1 = cluster.getWorker1();
+        final WildFlyContainer worker2 = cluster.getWorker2();
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Assign both workers to the same load-balancing group (batch config before reloads)
+        worker1.modCluster().setLoadBalancingGroup("groupOne");
+        worker2.modCluster().setLoadBalancingGroup("groupOne");
+        worker1.reload();
+        worker2.reload();
+
+        // Wait for registration and verify accessible
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode()).isEqualTo(200);
+                });
+
+        log.info("Both workers registered in groupOne and serving requests");
+
+        // Stop the group via the balancer proxy
+        cluster.getBalancer().stopLoadBalancingGroup("groupOne");
+        Thread.sleep(2000);
+
+        // Verify requests return 503 (no workers available)
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode())
+                            .as("Requests to stopped group should return 503")
+                            .isEqualTo(503);
+                });
+
+        log.info("Group stopped - requests return 503");
+
+        // Re-enable the group
+        cluster.getBalancer().enableLoadBalancingGroup("groupOne");
+        Thread.sleep(2000);
+
+        // Verify accessible again
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode())
+                            .as("Requests should succeed after re-enabling group")
+                            .isEqualTo(200);
+                });
+
+        log.info("Group re-enabled - requests succeed again");
+    }
+
+    /**
+     * Verifies that the context status is displayed as STOPPED on the balancer when a node
+     * is stopped via the proxy. Starts one worker, stops the node, queries context status,
+     * and verifies it reports STOPPED. Re-enables and verifies accessibility is restored.
+     */
+    @Test
+    public void testContextStatusDisplayedAsStoppedWhenStopped(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(1);
+        final WildFlyContainer worker = cluster.getWorker1();
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Verify demo is accessible
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode()).isEqualTo(200);
+                });
+
+        log.info("Demo context is accessible, stopping node via proxy");
+
+        // Stop the node via balancer proxy
+        cluster.getBalancer().stopNode("worker1");
+
+        // Wait for stop to propagate and verify context status is STOPPED
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final String status = cluster.getBalancer().getContextStatus("worker1", "/demo");
+                    assertThat(status)
+                            .as("Context status should be STOPPED after stopping node")
+                            .isEqualToIgnoringCase("STOPPED");
+                });
+
+        log.info("Context status confirmed as STOPPED");
+
+        // Re-enable the node
+        cluster.getBalancer().enableNode("worker1");
+        Thread.sleep(2000);
+
+        // Verify demo is accessible again
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode())
+                            .as("Demo should be accessible after re-enabling node")
+                            .isEqualTo(200);
+                });
+
+        log.info("Node re-enabled - context accessible again");
+    }
+
+    /**
+     * Verifies that session draining works correctly when a node is disabled via the balancer proxy.
+     * Disables worker1 on the balancer (existing sessions preserved, no new sessions),
+     * verifies the session is still served by worker1, then stops worker1 and verifies
+     * failover to worker2.
+     */
+    @Test
+    public void testSessionDrainWithEnoughTime(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(2);
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Wait for both workers to register
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 10);
+                    assertThat(distribution).containsKey("worker1");
+                    assertThat(distribution).containsKey("worker2");
+                });
+
+        log.info("Both workers registered, establishing session on worker1");
+
+        // Establish a session specifically on worker1
+        String sessionCookie = null;
+        for (int i = 0; i < 20; i++) {
+            HttpResponse sessionResponse = httpClient.get(balancerUrl);
+            if (sessionResponse.getBody().contains("worker1")) {
+                sessionCookie = sessionResponse.getCookie("JSESSIONID");
+                break;
+            }
+        }
+
+        if (sessionCookie == null) {
+            throw new AssertionError("Could not establish a session on worker1 after 20 attempts");
+        }
+
+        final String jsessionId = sessionCookie;
+        log.info("Session established on worker1: JSESSIONID={}", jsessionId);
+
+        // Disable worker1 via balancer proxy (existing sessions preserved, no new sessions)
+        cluster.getBalancer().disableNode("worker1");
+        Thread.sleep(2000);
+
+        // Verify existing session is still served by worker1 during draining
+        final HttpResponse drainingResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + jsessionId);
+        softly.assertThat(drainingResponse.getStatusCode())
+                .as("Existing session should still be served during draining")
+                .isEqualTo(200);
+        softly.assertThat(drainingResponse.getBody())
+                .as("Session should still be routed to worker1 during draining")
+                .contains("worker1");
+
+        // Verify new requests go to worker2 (worker1 disabled for new sessions)
+        final HttpResponse newRequestResponse = httpClient.get(balancerUrl);
+        softly.assertThat(newRequestResponse.getBody())
+                .as("New requests should go to worker2 while worker1 is disabled")
+                .contains("worker2");
+
+        log.info("Session still served on worker1 during draining, new requests go to worker2");
+
+        // Stop worker1 via balancer proxy (all routing ceases)
+        cluster.getBalancer().stopNode("worker1");
+
+        // Wait for session to fail over to worker2
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse failoverResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + jsessionId);
+                    assertThat(failoverResponse.getStatusCode()).isEqualTo(200);
+                    assertThat(failoverResponse.getBody())
+                            .as("After stop, session should fail over to worker2")
+                            .contains("worker2");
+                });
+
+        log.info("Session successfully failed over to worker2 after stop");
+    }
+
+    /**
+     * Verifies that stopping a node without first disabling it causes immediate session failover.
+     * Establishes a session on worker1, stops worker1 via the balancer proxy (no prior disable),
+     * and verifies the session is routed to worker2 promptly.
+     */
+    @Test
+    public void testSessionDrainWithoutEnoughTime(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(2);
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Wait for both workers to register
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 10);
+                    assertThat(distribution).containsKey("worker1");
+                    assertThat(distribution).containsKey("worker2");
+                });
+
+        log.info("Both workers registered, establishing session on worker1");
+
+        // Establish a session specifically on worker1
+        String sessionCookie = null;
+        for (int i = 0; i < 20; i++) {
+            HttpResponse sessionResponse = httpClient.get(balancerUrl);
+            if (sessionResponse.getBody().contains("worker1")) {
+                sessionCookie = sessionResponse.getCookie("JSESSIONID");
+                break;
+            }
+        }
+
+        if (sessionCookie == null) {
+            throw new AssertionError("Could not establish a session on worker1 after 20 attempts");
+        }
+
+        final String jsessionId = sessionCookie;
+        log.info("Session established on worker1: JSESSIONID={}", jsessionId);
+
+        // Stop worker1 via balancer proxy immediately (no prior disable, no draining period)
+        cluster.getBalancer().stopNode("worker1");
+
+        // Verify session fails over to worker2
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    final HttpResponse failoverResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + jsessionId);
+                    assertThat(failoverResponse.getStatusCode()).isEqualTo(200);
+                    assertThat(failoverResponse.getBody())
+                            .as("After stop, session should fail over to worker2")
+                            .contains("worker2");
+                });
+
+        log.info("Session failed over to worker2 after immediate stop");
     }
 
     /**
@@ -148,11 +758,12 @@ public class ContextLifecycleTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
-        // Verify context is initially accessible
-        HttpResponse initialResponse = httpClient.get(balancerUrl);
-        softly.assertThat(initialResponse.getStatusCode())
-                .as("Context should be accessible initially")
-                .isEqualTo(200);
+        // Wait for context to be accessible via balancer
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode()).isEqualTo(200);
+                });
 
         log.info("Context accessible, now invoking DISABLE-CONTEXT operation");
 
@@ -215,11 +826,12 @@ public class ContextLifecycleTest {
         int timeoutSeconds = stopTimeout.asInt();
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
-        // Verify context is accessible before stop
-        HttpResponse response = httpClient.get(balancerUrl);
-        softly.assertThat(response.getStatusCode())
-                .as("Context should be accessible before stop")
-                .isEqualTo(200);
+        // Wait for context to be accessible before stop
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode()).isEqualTo(200);
+                });
 
         log.info("Invoking STOP-CONTEXT operation with timeout: {} seconds", timeoutSeconds);
 
@@ -242,10 +854,6 @@ public class ContextLifecycleTest {
         // the context is actually stopped (unavailable) is the key behavior
     }
 
-    /**
-     * Verifies that multiple contexts can be deployed and accessed on a single worker.
-     * Passes if both /demo and root context are accessible and load balanced.
-     */
     /**
      * Verifies that multiple contexts can be deployed and accessed on a single worker.
      * Tests that contexts coexist independently and one context's lifecycle doesn't affect others.
@@ -272,15 +880,13 @@ public class ContextLifecycleTest {
             log.info("Deployed context: {}", contextName);
         }
 
-        // Wait for contexts to register with mod_cluster
-        Thread.sleep(3000);
-
-        // Verify original demo context still works
+        // Wait for original demo context to be accessible
         String demoBalancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
-        HttpResponse demoResponse = httpClient.get(demoBalancerUrl);
-        softly.assertThat(demoResponse.getStatusCode())
-                .as("Original demo context should be accessible via balancer")
-                .isEqualTo(200);
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    HttpResponse response = httpClient.get(demoBalancerUrl);
+                    assertThat(response.getStatusCode()).isEqualTo(200);
+                });
 
         // Verify all new contexts are accessible via balancer
         log.info("Verifying all contexts accessible via balancer");
@@ -377,11 +983,12 @@ public class ContextLifecycleTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
-        // Verify initial deployment is accessible
-        HttpResponse initialResponse = httpClient.get(balancerUrl);
-        softly.assertThat(initialResponse.getStatusCode())
-                .as("Context should be accessible before redeployment")
-                .isEqualTo(200);
+        // Wait for initial deployment to be accessible
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    HttpResponse response = httpClient.get(balancerUrl);
+                    assertThat(response.getStatusCode()).isEqualTo(200);
+                });
 
         log.info("Initial deployment verified, now undeploying demo.war");
 

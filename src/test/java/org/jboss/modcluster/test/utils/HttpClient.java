@@ -6,6 +6,7 @@ import okhttp3.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
@@ -28,6 +29,7 @@ public class HttpClient {
     private final OkHttpClient client;
     private final OkHttpClient insecureClient;
     private OkHttpClient trustedClient;
+    private OkHttpClient mtlsClient;
 
     public HttpClient() {
         this.client = new OkHttpClient.Builder()
@@ -219,6 +221,94 @@ public class HttpClient {
                 .build();
 
         try (Response response = trustedClient.newCall(request).execute()) {
+            return new HttpResponse(
+                    response.code(),
+                    response.body() != null ? response.body().string() : "",
+                    extractCookies(response),
+                    extractHeaders(response)
+            );
+        }
+    }
+
+    /**
+     * Configures mutual TLS (mTLS) using a trust store and a client keystore from the classpath.
+     * After calling this method, {@link #getHttpsMtls(String)} will present the client certificate
+     * during the TLS handshake while also validating the server certificate against the trust store.
+     *
+     * <p>Hostname verification is relaxed because container hostnames are dynamic
+     * in test environments. Certificate chain validation is the important part.</p>
+     *
+     * @param trustStoreResource path to JKS trust store on classpath
+     * @param trustStorePassword trust store password
+     * @param clientKeystoreResource path to JKS client keystore on classpath
+     * @param clientKeystorePassword client keystore password
+     */
+    public void configureMtlsClient(final String trustStoreResource, final String trustStorePassword,
+                                     final String clientKeystoreResource, final String clientKeystorePassword) {
+        try (InputStream trustStoreStream = Thread.currentThread().getContextClassLoader()
+                    .getResourceAsStream(trustStoreResource);
+             InputStream clientKeystoreStream = Thread.currentThread().getContextClassLoader()
+                    .getResourceAsStream(clientKeystoreResource)) {
+
+            if (trustStoreStream == null) {
+                throw new IllegalArgumentException("Trust store not found on classpath: " + trustStoreResource);
+            }
+            if (clientKeystoreStream == null) {
+                throw new IllegalArgumentException("Client keystore not found on classpath: " + clientKeystoreResource);
+            }
+
+            // Load trust store
+            KeyStore trustStore = KeyStore.getInstance("JKS");
+            trustStore.load(trustStoreStream, trustStorePassword.toCharArray());
+
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(trustStore);
+
+            // Load client keystore
+            KeyStore clientKeyStore = KeyStore.getInstance("JKS");
+            clientKeyStore.load(clientKeystoreStream, clientKeystorePassword.toCharArray());
+
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(clientKeyStore, clientKeystorePassword.toCharArray());
+
+            // Create SSL context with both key managers and trust managers
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), new java.security.SecureRandom());
+
+            X509TrustManager trustManager = (X509TrustManager) tmf.getTrustManagers()[0];
+
+            this.mtlsClient = new OkHttpClient.Builder()
+                    .sslSocketFactory(sslContext.getSocketFactory(), trustManager)
+                    .hostnameVerifier((hostname, session) -> true) // container hostnames are dynamic
+                    .connectTimeout(3, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
+                    .followRedirects(false)
+                    .build();
+
+            log.info("mTLS client configured with trust store '{}' and client keystore '{}'",
+                    trustStoreResource, clientKeystoreResource);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to configure mTLS client", e);
+        }
+    }
+
+    /**
+     * Perform an HTTPS GET request with mutual TLS (client certificate authentication).
+     * Requires {@link #configureMtlsClient(String, String, String, String)} to be called first.
+     *
+     * @param url HTTPS URL to request
+     * @return HTTP response
+     * @throws IOException if the request fails
+     * @throws IllegalStateException if mTLS client has not been configured
+     */
+    public HttpResponse getHttpsMtls(final String url) throws IOException {
+        if (mtlsClient == null) {
+            throw new IllegalStateException("mTLS client not configured. Call configureMtlsClient() first.");
+        }
+
+        Request request = new Request.Builder().url(url).build();
+
+        try (Response response = mtlsClient.newCall(request).execute()) {
             return new HttpResponse(
                     response.code(),
                     response.body() != null ? response.body().string() : "",

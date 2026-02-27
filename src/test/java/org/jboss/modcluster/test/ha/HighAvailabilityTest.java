@@ -234,27 +234,78 @@ public class HighAvailabilityTest {
     }
 
     /**
-     * DEFERRED TO PHASE 3: Two balancer settings test.
-     * Requires multiple balancer orchestration, different worker groups, complex network isolation.
+     * Verifies that workers can be assigned to different balancer groups and that
+     * each group functions independently with sticky sessions.
+     * Workers 1-2 register under "balancerXXX1", workers 3-4 under "balancerYYY2".
+     * Passes if both balancer groups are visible and sticky sessions work within a group.
      */
     @Test
-    @Disabled("Phase 3: Multiple balancer orchestration required")
-    public void testTwoBalancerSettings() throws Exception {
-        /*
-         * This test requires:
-         * - 2 independent balancers with different configurations
-         * - 2 groups of workers, each group associated with one balancer
-         * - Network isolation to ensure workers only communicate with their assigned balancer
-         * - Verification that workers respect their balancer-specific settings
-         *
-         * Infrastructure needs:
-         * - Multiple Network instances in Testcontainers
-         * - Balancer group configuration in mod_cluster subsystem
-         * - Worker affinity to specific balancer groups
-         *
-         * Deferred to Phase 3 for proper multi-balancer infrastructure support.
-         */
-        log.info("Test deferred to Phase 3: Multiple balancer orchestration required");
+    public void testTwoBalancerSettings(TestCluster cluster, HttpClient httpClient) throws Exception {
+        cluster.startWorkers(4);
+
+        final String balancerName1 = "balancerXXX1";
+        final String balancerName2 = "balancerYYY2";
+
+        // Assign workers 1-2 to balancerXXX1
+        cluster.getWorker1().modCluster().setBalancerName(balancerName1);
+        cluster.getWorker2().modCluster().setBalancerName(balancerName1);
+
+        // Assign workers 3-4 to balancerYYY2
+        cluster.getWorker3().modCluster().setBalancerName(balancerName2);
+        cluster.getWorker4().modCluster().setBalancerName(balancerName2);
+
+        // Reload all workers to apply balancer name changes
+        log.info("Reloading all workers to apply balancer name changes");
+        cluster.getWorker1().reload();
+        cluster.getWorker2().reload();
+        cluster.getWorker3().reload();
+        cluster.getWorker4().reload();
+
+        // Wait for all 4 workers to register with the balancer
+        log.info("Waiting for all 4 workers to register");
+        await().atMost(ofSeconds(60))
+            .pollInterval(ofSeconds(5))
+            .untilAsserted(() -> {
+                Map<String, org.jboss.dmr.ModelNode> workers = cluster.getBalancer().getWorkerInfo();
+                assertThat(workers).hasSize(4);
+            });
+
+        // Assert both balancer groups are present
+        final List<String> balancerNames = cluster.getBalancer().getBalancerNames();
+        log.info("Balancer names: {}", balancerNames);
+        softly.assertThat(balancerNames)
+            .as("Both balancer groups should be registered")
+            .containsExactlyInAnyOrder(balancerName1, balancerName2);
+
+        // Verify sticky sessions within a group: establish session and make 10 requests
+        final String url = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final HttpResponse initial = httpClient.get(url);
+        final String sessionId = initial.getCookie("JSESSIONID");
+        final String initialWorker = extractWorkerFromResponse(initial);
+
+        softly.assertThat(initial.getStatusCode())
+            .as("Initial request should succeed")
+            .isEqualTo(200);
+        softly.assertThat(sessionId)
+            .as("Session should be established")
+            .isNotNull();
+
+        log.info("Session established on worker '{}' (JSESSIONID={})", initialWorker, sessionId);
+
+        // Make 10 follow-up requests - session should stick to the same worker
+        for (int i = 1; i <= 10; i++) {
+            final HttpResponse response = httpClient.getWithSession(url, "JSESSIONID=" + sessionId);
+            final String worker = extractWorkerFromResponse(response);
+
+            softly.assertThat(response.getStatusCode())
+                .as("Request %d should succeed", i)
+                .isEqualTo(200);
+            softly.assertThat(worker)
+                .as("Request %d should stick to the same worker", i)
+                .isEqualTo(initialWorker);
+        }
+
+        log.info("Two balancer settings test completed successfully");
     }
 
     /**
@@ -262,7 +313,7 @@ public class HighAvailabilityTest {
      * Requires httpd balancer support, state synchronization verification, MCM parsing.
      */
     @Test
-    @Disabled("Phase 3: httpd balancer support required")
+    @Disabled("Undertow-incompatible: requires httpd balancer")
     public void testTwoHttpdInstances() throws Exception {
         /*
          * This test requires:

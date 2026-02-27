@@ -7,10 +7,15 @@ import org.jboss.modcluster.test.base.ModClusterTestExtension;
 import org.jboss.modcluster.test.base.ModClusterTestExtension.TestCluster;
 import org.jboss.modcluster.test.utils.HttpClient;
 import org.jboss.modcluster.test.utils.HttpClient.HttpResponse;
+import org.jboss.modcluster.test.utils.WildFlyContainer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static java.time.Duration.ofSeconds;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Tests for sticky session functionality with mod_cluster.
@@ -97,6 +102,129 @@ public class StickySessionTest {
                         .isEqualTo(assignedWorker);
             }
         }
+    }
+
+    /**
+     * Verifies that sticky-session-force=true causes 503 when the sticky worker is killed.
+     * With sticky-session-force enabled, the balancer refuses to failover to another worker
+     * and returns 503 Service Unavailable instead.
+     */
+    @Test
+    public void testStickySessionForce(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doStickySessionFailoverTest(cluster, httpClient, true, false, 503);
+    }
+
+    /**
+     * Verifies that sticky-session-force=false allows failover when the sticky worker is killed.
+     * The session is preserved via distributed session cache and the request succeeds on a different worker.
+     */
+    @Test
+    public void testStickySessionFailover(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doStickySessionFailoverTest(cluster, httpClient, false, false, 200);
+    }
+
+    /**
+     * Verifies that sticky-session-force=true causes 503 when the sticky worker is killed
+     * and the session ID is passed via URL encoding instead of a cookie header.
+     * URL format: /demo/;jsessionid=sessionid
+     */
+    @Test
+    public void testStickySessionForceWithUrlEncodedSession(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doStickySessionFailoverTest(cluster, httpClient, true, true, 503);
+    }
+
+    /**
+     * Verifies that sticky-session-force=false allows failover when the sticky worker is killed
+     * and the session ID is passed via URL encoding instead of a cookie header.
+     * URL format: /demo/;jsessionid=sessionid
+     */
+    @Test
+    public void testStickySessionFailoverWithUrlEncodedSession(TestCluster cluster, HttpClient httpClient) throws Exception {
+        doStickySessionFailoverTest(cluster, httpClient, false, true, 200);
+    }
+
+    /**
+     * Common implementation for sticky session failover tests.
+     * Configures sticky session settings on both workers, establishes a session,
+     * kills the worker handling the session, and verifies the expected HTTP response code.
+     *
+     * @param cluster the test cluster
+     * @param httpClient the HTTP client
+     * @param stickySessionForce whether to enable sticky-session-force (true returns 503 on failover)
+     * @param useUrlEncodedSession whether to pass JSESSIONID in URL instead of cookie header
+     * @param expectedStatusCode the expected HTTP status code after killing the sticky worker
+     */
+    private void doStickySessionFailoverTest(TestCluster cluster, HttpClient httpClient,
+                                              boolean stickySessionForce, boolean useUrlEncodedSession,
+                                              int expectedStatusCode) throws Exception {
+        cluster.startWorkers(2);
+        final WildFlyContainer worker1 = cluster.getWorker1();
+        final WildFlyContainer worker2 = cluster.getWorker2();
+
+        // Configure sticky session settings on both workers (batch config before reloads)
+        worker1.modCluster().setStickySession(true);
+        worker1.modCluster().setStickySessionForce(stickySessionForce);
+        worker1.modCluster().setStickySessionRemove(false);
+
+        worker2.modCluster().setStickySession(true);
+        worker2.modCluster().setStickySessionForce(stickySessionForce);
+        worker2.modCluster().setStickySessionRemove(false);
+
+        // Reload sequentially after all config is set
+        worker1.reload();
+        worker2.reload();
+
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+
+        // Wait for both workers to register with the balancer after reload
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                .untilAsserted(() -> {
+                    HttpResponse resp = httpClient.get(balancerUrl);
+                    assertThat(resp.getStatusCode()).isEqualTo(200);
+                });
+
+        // Establish a session via initial request
+        final HttpResponse initialResponse = httpClient.get(balancerUrl);
+        final String sessionCookie = initialResponse.getCookie("JSESSIONID");
+        softly.assertThat(sessionCookie)
+                .as("Session cookie should be set on initial request")
+                .isNotNull();
+
+        final String initialWorker = extractWorkerFromSessionId(sessionCookie);
+        log.info("Session established: {} on worker: {}", sessionCookie, initialWorker);
+
+        // Kill the worker handling the session
+        if ("worker1".equals(initialWorker)) {
+            log.info("Killing worker1 (session holder)...");
+            worker1.kill();
+        } else {
+            log.info("Killing worker2 (session holder)...");
+            worker2.kill();
+        }
+
+        // Wait for balancer to detect the dead node via health check (interval: 5s)
+        // but NOT long enough for broken-node-timeout (10s) to remove the node entirely.
+        // If the node is removed, the balancer treats the route as unknown and routes normally.
+        Thread.sleep(7000);
+
+        // Send request with existing session and verify expected status code
+        final HttpResponse failoverResponse;
+        if (useUrlEncodedSession) {
+            // Pass session ID in URL, no Cookie header
+            final String urlWithSession = cluster.getBalancer().getHttpUrl() + "/demo/;jsessionid=" + sessionCookie;
+            failoverResponse = httpClient.get(urlWithSession);
+        } else {
+            // Pass session ID in Cookie header
+            failoverResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+        }
+
+        softly.assertThat(failoverResponse.getStatusCode())
+                .as("Expected HTTP %d after killing sticky worker (force=%s, urlEncoded=%s)",
+                        expectedStatusCode, stickySessionForce, useUrlEncodedSession)
+                .isEqualTo(expectedStatusCode);
+
+        log.info("Sticky session test completed: force={}, urlEncoded={}, expectedStatus={}, actualStatus={}",
+                stickySessionForce, useUrlEncodedSession, expectedStatusCode, failoverResponse.getStatusCode());
     }
 
     /**

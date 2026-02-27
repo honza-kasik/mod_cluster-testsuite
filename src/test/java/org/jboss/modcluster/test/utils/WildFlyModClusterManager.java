@@ -164,6 +164,20 @@ public class WildFlyModClusterManager {
     }
 
     /**
+     * Set the balancer name this worker registers under on the balancer.
+     * Controls which load-balancing group the worker belongs to.
+     * Requires a server reload to take effect.
+     *
+     * @param balancerName the balancer group name (e.g., "balancerXXX1")
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void setBalancerName(String balancerName) throws IOException, OperationException {
+        writeModClusterAttribute("balancer", balancerName);
+        log.info("Set balancer name to '{}' on worker '{}'", balancerName, container.getName());
+    }
+
+    /**
      * Set the session draining strategy on this worker's mod_cluster subsystem.
      * Controls whether sessions are drained before stopping a context.
      *
@@ -258,5 +272,155 @@ public class WildFlyModClusterManager {
         result.assertSuccess();
         log.info("Stopped context '{}' on virtualhost '{}' for worker '{}'",
                  normalizedContext, virtualHost, container.getName());
+    }
+
+    /**
+     * Disable this node via mod_cluster CLI operation.
+     * The node will not receive new requests but will continue serving existing sessions.
+     *
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void disableNode() throws IOException, OperationException {
+        Operations ops = container.getOperations();
+        Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
+
+        ModelNodeResult result = ops.invoke("disable", modclusterAddress);
+        result.assertSuccess();
+        log.info("Disabled node '{}' via mod_cluster CLI", container.getName());
+    }
+
+    /**
+     * Stop this node via mod_cluster CLI operation.
+     * The node will drain sessions and then stop accepting requests.
+     *
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void stopNode() throws IOException, OperationException {
+        Operations ops = container.getOperations();
+        Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
+
+        ModelNodeResult result = ops.invoke("stop", modclusterAddress);
+        result.assertSuccess();
+        log.info("Stopped node '{}' via mod_cluster CLI", container.getName());
+    }
+
+    /**
+     * Enable this node via mod_cluster CLI operation.
+     * The node will start receiving new requests again.
+     *
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void enableNode() throws IOException, OperationException {
+        Operations ops = container.getOperations();
+        Address modclusterAddress = Address.subsystem("modcluster").and("proxy", "default");
+
+        ModelNodeResult result = ops.invoke("enable", modclusterAddress);
+        result.assertSuccess();
+        log.info("Enabled node '{}' via mod_cluster CLI", container.getName());
+    }
+
+    /**
+     * Set the load-balancing-group for this worker.
+     * Controls which load-balancing group the worker belongs to within a balancer.
+     * Requires a server reload to take effect.
+     *
+     * @param groupName the load-balancing group name (e.g., "groupOne")
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void setLoadBalancingGroup(String groupName) throws IOException, OperationException {
+        writeModClusterAttribute("load-balancing-group", groupName);
+        log.info("Set load-balancing-group to '{}' on worker '{}'", groupName, container.getName());
+    }
+
+    /**
+     * Set the sticky-session-force attribute on this worker's mod_cluster subsystem.
+     * When true, the balancer returns 503 instead of failover when the sticky node is down.
+     * Requires a server reload to take effect.
+     *
+     * @param force whether to force sticky session (true returns 503, false allows failover)
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void setStickySessionForce(boolean force) throws IOException, OperationException {
+        writeModClusterAttribute("sticky-session-force", force);
+        log.info("Set sticky-session-force to '{}' on worker '{}'", force, container.getName());
+    }
+
+    /**
+     * Set the sticky-session attribute on this worker's mod_cluster subsystem.
+     * When true, requests with existing sessions are routed to the same worker.
+     * Requires a server reload to take effect.
+     *
+     * @param sticky whether to enable sticky sessions
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void setStickySession(boolean sticky) throws IOException, OperationException {
+        writeModClusterAttribute("sticky-session", sticky);
+        log.info("Set sticky-session to '{}' on worker '{}'", sticky, container.getName());
+    }
+
+    /**
+     * Set the sticky-session-remove attribute on this worker's mod_cluster subsystem.
+     * When true, session cookies are removed on failover.
+     * Requires a server reload to take effect.
+     *
+     * @param remove whether to remove session cookies on failover
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void setStickySessionRemove(boolean remove) throws IOException, OperationException {
+        writeModClusterAttribute("sticky-session-remove", remove);
+        log.info("Set sticky-session-remove to '{}' on worker '{}'", remove, container.getName());
+    }
+
+    /**
+     * Set the max-attempts attribute on this worker's mod_cluster subsystem.
+     * Controls how many times the balancer will retry a request on different workers.
+     * Requires a server reload to take effect.
+     *
+     * @param maxAttempts the maximum number of retry attempts
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void setMaxAttempts(int maxAttempts) throws IOException, OperationException {
+        writeModClusterAttribute("max-attempts", maxAttempts);
+        log.info("Set max-attempts to '{}' on worker '{}'", maxAttempts, container.getName());
+    }
+
+    /**
+     * Disconnect this worker from all configured proxies.
+     * Clears the proxies list and disables advertise to prevent automatic discovery.
+     * After a subsequent reload, the worker will start without any proxy connection,
+     * allowing the balancer's broken-node-timeout to clear old node/context registrations.
+     * Call {@link #configureStaticProxy()} to re-establish the proxy connection.
+     *
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void disconnectFromProxy() throws IOException, OperationException {
+        ModelNode emptyList = new ModelNode();
+        emptyList.setEmptyList();
+        writeModClusterAttribute("proxies", emptyList);
+        writeModClusterAttribute("advertise", false);
+        log.info("Disconnected worker '{}' from proxy (cleared proxies, disabled advertise)", container.getName());
+    }
+
+    /**
+     * Set the node-timeout attribute on this worker's mod_cluster subsystem.
+     * Time in seconds to wait for a response from a backend node before timing out.
+     * Requires a server reload to take effect.
+     *
+     * @param timeoutSeconds timeout in seconds
+     * @throws IOException if there's a connection error
+     * @throws OperationException if the management operation fails
+     */
+    public void setNodeTimeout(int timeoutSeconds) throws IOException, OperationException {
+        writeModClusterAttribute("node-timeout", timeoutSeconds);
+        log.info("Set node-timeout to '{}' on worker '{}'", timeoutSeconds, container.getName());
     }
 }

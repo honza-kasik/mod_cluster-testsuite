@@ -36,6 +36,7 @@ public class WildFlyContainer {
     private OnlineManagementClient managementClient;
     private WildFlyDeploymentManager deploymentManager;
     private WildFlyModClusterManager modClusterManager;
+    private WildFlyUndertowManager undertowManager;
     private WildFlyLoadMetricsManager loadMetricsManager;
     private WildFlyJGroupsManager jgroupsManager;
 
@@ -306,6 +307,7 @@ public class WildFlyContainer {
             container = null;
             deploymentManager = null;
             modClusterManager = null;
+            undertowManager = null;
             loadMetricsManager = null;
             jgroupsManager = null;
         }
@@ -356,6 +358,7 @@ public class WildFlyContainer {
             container = null;
             deploymentManager = null;
             modClusterManager = null;
+            undertowManager = null;
             loadMetricsManager = null;
         }
     }
@@ -440,6 +443,19 @@ public class WildFlyContainer {
             modClusterManager = new WildFlyModClusterManager(this);
         }
         return modClusterManager;
+    }
+
+    /**
+     * Get Undertow subsystem manager for this worker.
+     * Provides access to Undertow server, socket binding, and listener management.
+     *
+     * @return cached Undertow manager instance
+     */
+    public WildFlyUndertowManager undertow() {
+        if (undertowManager == null) {
+            undertowManager = new WildFlyUndertowManager(this);
+        }
+        return undertowManager;
     }
 
     /**
