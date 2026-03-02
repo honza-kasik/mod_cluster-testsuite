@@ -79,18 +79,12 @@ src/test/java/org/jboss/modcluster/test/
    mvn generate-test-resources -Pdownload-wildfly -Dwildfly.version=34.0.1.Final -DskipTests
    ```
 
-2. **Run setup (builds container images)**:
+2. **Check prerequisites** (optional):
    ```bash
    ./setup.sh
    ```
 
-   This will:
-   - Check prerequisites (Java, Maven, Docker)
-   - Detect ZIPs in `distributions/`
-   - Build Docker images (once, cached for future runs)
-   - Show build summary
-
-3. **Run tests**:
+3. **Run tests** (Docker images are built automatically on first run):
    ```bash
    mvn test
    ```

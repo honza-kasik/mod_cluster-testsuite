@@ -18,32 +18,18 @@ Comprehensive guide for running mod_cluster tests with WildFly/EAP distributions
 # The SAME ZIP is used for both workers and undertow balancer!
 cp ~/Downloads/wildfly-39.0.1.Final.zip distributions/
 
-# 2. Setup (checks prerequisites and builds images)
+# 2. Check prerequisites (optional)
 ./setup.sh
 
-# 3. Run tests
+# 3. Run tests (Docker images are built automatically on first run)
 mvn test
 ```
 
 **What `./setup.sh` does**:
 - ✓ Checks Java, Maven, Docker/Podman
 - ✓ Finds ZIPs in `distributions/`
-- ✓ Builds Docker images from ZIPs (if not already built)
-- ✓ Shows summary of built/cached images
 
-**Output example**:
-```
-📦 wildfly-39.0.1.Final.zip (380M)
-  Required Java: openjdk-17
-  ⚙️  Building image (first time only)...
-  Building image: modcluster-test/wildfly-39-0-1-final:openjdk-17
-  This may take a few minutes...
-  ✓ Successfully built: modcluster-test/wildfly-39-0-1-final:openjdk-17
-
-Image Build Summary:
-  ✓ Cached (already existed): 0
-  ✓ Built successfully: 1
-```
+Docker images are built automatically by the test framework on first run (and cached for subsequent runs).
 
 **Note**: When you provide a ZIP, it's used for both:
 - **Workers** - WildFly/EAP instances serving applications
@@ -439,7 +425,7 @@ docker logs <container-id>
 
 ## Best Practices
 
-1. ✅ **Always run setup.sh** before first test run
+1. ✅ **Run setup.sh** to verify prerequisites before first test run
 2. ✅ **Use specific ZIP paths** in CI/CD for reproducibility
 3. ✅ **Clean distributions/** when switching major versions
 4. ✅ **Keep only one ZIP** in distributions/ for auto-detection

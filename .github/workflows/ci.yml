@@ -32,9 +32,6 @@ jobs:
           -Dwildfly.version=${{ matrix.wildfly-version }}
           -DskipTests
 
-      - name: Build images
-        run: ./setup.sh
-
       - name: Run tests
         run: >
           mvn -B test
