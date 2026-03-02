@@ -876,6 +876,7 @@ public abstract class BalancerContainer {
 
         private void startFromImage(String networkAlias) {
             String customImage = System.getProperty("balancer.undertow.image");
+            // Placeholder image — does not exist yet, override via -Dbalancer.undertow.image=
             String imageName = customImage != null ? customImage : "quay.io/modcluster/mod_cluster-undertow:latest";
 
             container = new GenericContainer<>(DockerImageName.parse(imageName))
@@ -1003,6 +1004,7 @@ public abstract class BalancerContainer {
          */
         private void startContainer(final String networkAlias) {
             final String customImage = System.getProperty("balancer.httpd.image");
+            // Placeholder image — does not exist yet, override via -Dbalancer.httpd.image=
             final String imageName = customImage != null ? customImage : "quay.io/mod_cluster/ci-httpd-dev";
             final int maxRetries = 5;
             final java.util.Random random = new java.util.Random();

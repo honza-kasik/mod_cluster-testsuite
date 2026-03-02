@@ -82,9 +82,12 @@ public class WildFlyContainer {
 
     /**
      * Start WildFly from pre-built container image (fallback).
+     * Note: This image reference is a placeholder and may not exist.
+     * Provide a ZIP in distributions/ for reliable operation.
      */
     private void startFromImage() {
         String wildflyVersion = System.getProperty("wildfly.version", "31.0.1.Final");
+        // Placeholder image — may not exist, provide a ZIP instead
         String imageName = "quay.io/wildfly/wildfly:" + wildflyVersion;
 
         startFromPreBuiltImage(imageName);

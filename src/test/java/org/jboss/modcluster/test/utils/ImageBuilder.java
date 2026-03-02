@@ -67,7 +67,9 @@ public class ImageBuilder {
                     "RUN echo 'Extracting %s...' && \\\n" +
                     "    unzip -q /opt/%s && \\\n" +
                     "    rm /opt/%s && \\\n" +
-                    "    (mv wildfly-* wildfly 2>/dev/null || mv jboss-eap-* wildfly 2>/dev/null || true) && \\\n" +
+                    "    EXTRACTED=$(find /opt -maxdepth 1 -mindepth 1 -type d ! -name wildfly | head -1) && \\\n" +
+                    "    echo \"Detected server directory: $EXTRACTED\" && \\\n" +
+                    "    if [ -n \"$EXTRACTED\" ]; then mv \"$EXTRACTED\" /opt/wildfly; fi && \\\n" +
                     "    chmod +x /opt/wildfly/bin/*.sh && \\\n" +
                     "    echo 'Creating management user...' && \\\n" +
                     "    /opt/wildfly/bin/add-user.sh -u admin -p admin -r ManagementRealm && \\\n" +

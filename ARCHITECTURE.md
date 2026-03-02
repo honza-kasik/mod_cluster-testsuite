@@ -129,6 +129,7 @@ standalone.sh -Djboss.modcluster.advertise=true
 
 **From Image**:
 ```java
+// Placeholder — override via -Dbalancer.httpd.image=
 DockerImageName.parse("quay.io/modcluster/mod_cluster-httpd:latest")
 ```
 

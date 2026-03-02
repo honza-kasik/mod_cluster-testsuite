@@ -145,10 +145,9 @@ mvn test -Dwildfly.zip.path=/path/to/custom-wildfly.zip -Dcontainer.java.version
 
 ### 5. Fallback Mode
 
-No ZIP provided - uses pre-built images:
+No ZIP provided — attempts to pull pre-built images. Note: the default `quay.io/modcluster/` images are **placeholders that do not exist yet**. Provide a ZIP or override with your own images.
 
 ```bash
-# Uses quay.io/wildfly/wildfly:31.0.1.Final
 mvn test -Dwildfly.version=31.0.1.Final
 ```
 
@@ -436,34 +435,6 @@ docker logs <container-id>
 9. ❌ **Don't use container reuse** in CI (causes flakiness)
 
 ## Performance
-
-### Expected Timings
-
-#### By Test Complexity
-
-| Test Type | Setup Time | Execution | Total |
-|-----------|-----------|-----------|-------|
-| Simple CLI test | 1-2 min | 5-10 sec | ~2 min |
-| Session test (2 workers) | 2-3 min | 10-20 sec | ~3 min |
-| Load test (100 requests) | 2-3 min | 30-60 sec | ~4 min |
-| SSL test | 2-3 min | 10-20 sec | ~3 min |
-
-#### By Balancer Type
-
-| Balancer | First Run | Cached Run |
-|----------|-----------|------------|
-| **Undertow** (from ZIP) | 3-5 min | 1-2 min |
-| **Undertow** (pre-built) | 1-2 min | 45-90 sec |
-| **httpd** (always pre-built) | 30-60 sec | 30-60 sec |
-
-#### Full Suite
-
-| Scenario | Time |
-|----------|------|
-| First run, no cache | ~20-30 min |
-| Subsequent runs, cached | ~10-15 min |
-| With container reuse | ~5-10 min |
-| Parallel (2 forks) | ~10-15 min |
 
 ### Container Reuse (Development)
 

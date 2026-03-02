@@ -53,8 +53,7 @@ The test framework will automatically detect ZIP files in this directory:
 
 ## Fallback
 
-If no ZIP is provided, the tests will fall back to using pre-built container images from:
-- `quay.io/wildfly/wildfly:31.0.1.Final`
+If no ZIP is provided, the tests will attempt to pull pre-built container images (e.g. `quay.io/wildfly/wildfly:31.0.1.Final`). These image references are **placeholders that may not exist** — always provide a ZIP for reliable operation.
 
 ## Multiple Versions
 

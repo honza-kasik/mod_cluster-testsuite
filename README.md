@@ -319,10 +319,10 @@ This is transparent to the tests — JGroups handles internal session replicatio
 ### Balancers
 - **Undertow balancer**:
   - **With ZIP**: Builds from your WildFly/EAP ZIP (same as workers)
-  - **Without ZIP**: Falls back to `quay.io/modcluster/mod_cluster-undertow:latest`
+  - **Without ZIP**: Falls back to a pre-built image (placeholder: `quay.io/modcluster/mod_cluster-undertow:latest` — does not exist yet, provide your own via `-Dbalancer.undertow.image=`)
   - Customizable via `-Dbalancer.undertow.image=`
 - **httpd balancer**:
-  - Always uses pre-built image: `quay.io/modcluster/mod_cluster-httpd:latest`
+  - Uses pre-built image (placeholder: `quay.io/modcluster/mod_cluster-httpd:latest` — does not exist yet, provide your own via `-Dbalancer.httpd.image=`)
   - Customizable via `-Dbalancer.httpd.image=`
 
 ### ZIP Distribution Priority
@@ -333,16 +333,15 @@ This is transparent to the tests — JGroups handles internal session replicatio
 
 ## Container Images
 
-Default images used (when no ZIP provided):
-- **Undertow balancer**: `quay.io/modcluster/mod_cluster-undertow:latest`
-- **httpd balancer**: `quay.io/modcluster/mod_cluster-httpd:latest`
-- **WildFly workers**: `quay.io/wildfly/wildfly:31.0.1.Final`
+Default fallback images (when no ZIP provided). The `quay.io/modcluster/` images are **placeholders that do not exist yet** — provide a ZIP or override with your own images.
 
-Custom balancer images:
-```bash
-mvn test -Dbalancer.undertow.image=my-custom-undertow:1.0
-mvn test -Dbalancer.httpd.image=my-custom-httpd:1.0
-```
+| Component | Default Image (placeholder) | Override |
+|-----------|---------------------------|----------|
+| Undertow balancer | `quay.io/modcluster/mod_cluster-undertow:latest` | `-Dbalancer.undertow.image=` |
+| httpd balancer | `quay.io/modcluster/mod_cluster-httpd:latest` | `-Dbalancer.httpd.image=` |
+| WildFly workers | `quay.io/wildfly/wildfly:<version>` | Provide a ZIP in `distributions/` |
+
+In practice, always provide a WildFly/EAP ZIP — the fallback images are not published.
 
 ## Contributing
 

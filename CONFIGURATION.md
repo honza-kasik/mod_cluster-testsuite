@@ -30,8 +30,8 @@ All configuration is done via Maven system properties (`-D` flags).
 | Property | Description | Default | Example |
 |----------|-------------|---------|---------|
 | `balancer.type` | Balancer type | `undertow` | `-Dbalancer.type=httpd` |
-| `balancer.undertow.image` | Custom Undertow image | `quay.io/modcluster/mod_cluster-undertow:latest` | `-Dbalancer.undertow.image=my-registry.com/undertow:1.0` |
-| `balancer.httpd.image` | Custom httpd image | `quay.io/modcluster/mod_cluster-httpd:latest` | `-Dbalancer.httpd.image=my-registry.com/httpd:2.4` |
+| `balancer.undertow.image` | Custom Undertow image | `quay.io/modcluster/mod_cluster-undertow:latest` (placeholder, does not exist) | `-Dbalancer.undertow.image=my-registry.com/undertow:1.0` |
+| `balancer.httpd.image` | Custom httpd image | `quay.io/modcluster/mod_cluster-httpd:latest` (placeholder, does not exist) | `-Dbalancer.httpd.image=my-registry.com/httpd:2.4` |
 
 ### Test Execution
 
@@ -202,7 +202,7 @@ Example:
 -Dwildfly.zip.path=/explicit/path.zip           # 1. System property (wins)
 export WILDFLY_ZIP_PATH=/env/path.zip           # 2. Environment variable
 distributions/wildfly-31.0.1.Final.zip          # 3. Convention
-quay.io/wildfly/wildfly:31.0.1.Final           # 4. Default fallback
+quay.io/wildfly/wildfly:31.0.1.Final           # 4. Default fallback (placeholder, may not exist)
 ```
 
 ## Validation
