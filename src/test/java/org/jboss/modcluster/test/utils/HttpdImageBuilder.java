@@ -159,7 +159,7 @@ public class HttpdImageBuilder {
             try (FileWriter w = new FileWriter(dockerfile)) {
                 w.write(
                     "FROM " + baseImage + "\n" +
-                    "RUN dnf install -y pcre apr-util openssl unzip findutils hostname && dnf clean all\n" +
+                    "RUN dnf install -y pcre apr-util openssl unzip findutils hostname jansson mailcap && dnf clean all\n" +
                     "COPY " + zipFileName + " /opt/" + zipFileName + "\n" +
                     "RUN set -e && \\\n" +
                     "    unzip -q /opt/" + zipFileName + " -d /opt && rm /opt/" + zipFileName + " && \\\n" +
@@ -188,6 +188,8 @@ public class HttpdImageBuilder {
                     "    # Disable proxy_balancer (conflicts with mod_proxy_cluster)\n" +
                     "    find /usr/local/apache2 -name '*.conf' -exec \\\n" +
                     "        sed -i 's/^\\(LoadModule proxy_balancer_module\\)/#\\1/' {} \\; 2>/dev/null; \\\n" +
+                    "    # Remove shipped mod_proxy_cluster config — the test provides its own\n" +
+                    "    rm -f /usr/local/apache2/conf.d/mod_proxy_cluster.conf && \\\n" +
                     "    echo '--- httpd version ---' && /usr/local/apache2/bin/httpd -v\n" +
                     "EXPOSE 8080 8443 6666\n"
                 );
