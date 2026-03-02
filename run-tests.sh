@@ -9,6 +9,9 @@
 #   WILDFLY_ZIP_PATH   - explicit path to a local ZIP (skips download)
 #   WILDFLY_VERSION    - WildFly version to download from Maven Central as last resort
 #   EAP_VERSION        - EAP version string for build description (derived automatically)
+#   HTTPD_ZIP_PATH     - explicit path to a local httpd ZIP (skips download)
+#   HTTPD_ZIP_URL      - base directory URL containing httpd ZIPs
+#   HTTPD_LABEL        - &&-separated substrings to match ZIP filename (e.g. "RHEL9&&x86_64")
 #   USERNAME / TOKEN   - credentials for authenticated downloads from Jenkins
 #
 
@@ -38,6 +41,57 @@ download_file() {
     fi
 }
 
+# Fetch a directory listing from a URL, extract .zip hrefs, and filter by
+# &&-separated label tokens. Returns the matching filename on stdout.
+# Fails if 0 or >1 matches.
+#   $1 - directory URL
+#   $2 - label expression (e.g. "RHEL9&&x86_64")
+resolve_zip_from_listing() {
+    local DIR_URL="${1%/}"
+    local LABEL_EXP="$2"
+
+    # Fetch listing, extract href="...*.zip" filenames
+    local LISTING
+    LISTING=$(wget -q --no-check-certificate -O - "$DIR_URL/" \
+        ${USERNAME:+--http-user "$USERNAME"} \
+        ${TOKEN:+--http-password "$TOKEN"} \
+        | grep -oP 'href="\K[^"]*\.zip' | sort -u)
+
+    if [ -z "$LISTING" ]; then
+        echo "ERROR: No .zip files found at $DIR_URL" >&2
+        return 1
+    fi
+
+    # Filter by &&-separated tokens that appear in the listing;
+    # tokens not found in any filename (e.g. "large") are skipped.
+    local MATCHES="$LISTING"
+    IFS='&&' read -ra TOKENS <<< "$LABEL_EXP"
+    for TOKEN_VAL in "${TOKENS[@]}"; do
+        TOKEN_VAL=$(echo "$TOKEN_VAL" | xargs)  # trim whitespace
+        [ -z "$TOKEN_VAL" ] && continue
+        local FILTERED
+        FILTERED=$(echo "$MATCHES" | grep -F "$TOKEN_VAL" || true)
+        if [ -n "$FILTERED" ]; then
+            MATCHES="$FILTERED"
+        else
+            echo "NOTE: Ignoring label token '$TOKEN_VAL' (not found in any ZIP filename)" >&2
+        fi
+    done
+
+    local COUNT
+    COUNT=$(echo "$MATCHES" | grep -c . || true)
+    if [ "$COUNT" -eq 0 ]; then
+        echo "ERROR: No ZIP matching label '$LABEL_EXP' in listing from $DIR_URL" >&2
+        echo "Available: $(echo "$LISTING" | tr '\n' ' ')" >&2
+        return 1
+    elif [ "$COUNT" -gt 1 ]; then
+        echo "ERROR: Multiple ZIPs match label '$LABEL_EXP': $(echo "$MATCHES" | tr '\n' ' ')" >&2
+        return 1
+    fi
+
+    echo "$MATCHES"
+}
+
 # ---------- Banner ----------
 
 echo "============================================="
@@ -48,6 +102,7 @@ echo " Node:      $(hostname)"
 echo " Date:      $(date)"
 echo " Java:      $(java -version 2>&1 | head -1)"
 echo " Maven:     $(mvn --version 2>&1 | head -1)"
+echo " Httpd ZIP: ${HTTPD_ZIP_PATH:-<default: build from source>}"
 echo "============================================="
 echo
 
@@ -100,9 +155,29 @@ fi
 echo "EAP_VERSION=${EAP_VERSION}"
 echo
 
+# ---------- Resolve httpd ZIP (optional) ----------
+# Priority:
+#   1. HTTPD_ZIP_PATH   - explicit local path
+#   2. HTTPD_ZIP_URL + HTTPD_LABEL - download matching ZIP from directory listing
+
+if [ -z "${HTTPD_ZIP_PATH:-}" ] && [ -n "${HTTPD_ZIP_URL:-}" ] && [ -n "${HTTPD_LABEL:-}" ]; then
+    echo "Resolving httpd ZIP from: $HTTPD_ZIP_URL (label: $HTTPD_LABEL)"
+    HTTPD_ZIP_NAME=$(resolve_zip_from_listing "$HTTPD_ZIP_URL" "$HTTPD_LABEL")
+    HTTPD_ZIP_PATH="distributions/${HTTPD_ZIP_NAME}"
+    echo "Downloading httpd ZIP: $HTTPD_ZIP_URL/$HTTPD_ZIP_NAME"
+    download_file "$HTTPD_ZIP_URL/$HTTPD_ZIP_NAME" "$HTTPD_ZIP_PATH"
+    export HTTPD_ZIP_PATH
+    echo "Downloaded: $HTTPD_ZIP_PATH"
+fi
+
+if [ -n "${HTTPD_ZIP_PATH:-}" ]; then
+    echo "Using httpd ZIP: $HTTPD_ZIP_PATH"
+fi
+
 # ---------- Run tests ----------
 
 mvn -B test \
     -Pci \
     -Dbalancer.type="${WHICH_BALANCER:-undertow}" \
-    -Dwildfly.zip.path="$WILDFLY_ZIP_PATH"
+    -Dwildfly.zip.path="$WILDFLY_ZIP_PATH" \
+    ${HTTPD_ZIP_PATH:+-Dhttpd.zip.path="$HTTPD_ZIP_PATH"}
