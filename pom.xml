@@ -256,6 +256,28 @@
             </properties>
         </profile>
 
+        <!-- Automatically exclude Undertow-only tests when running with httpd balancer -->
+        <profile>
+            <id>httpd-balancer</id>
+            <activation>
+                <property>
+                    <name>balancer.type</name>
+                    <value>httpd</value>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <excludedGroups>undertow</excludedGroups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <!-- CI Profile -->
         <profile>
             <id>ci</id>

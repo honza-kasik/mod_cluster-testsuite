@@ -383,6 +383,15 @@ public class WildFlyContainer {
         return name;
     }
 
+    /**
+     * Get the balancer container that this worker is associated with.
+     *
+     * @return the balancer container
+     */
+    public BalancerContainer getBalancer() {
+        return balancer;
+    }
+
     public GenericContainer<?> getContainer() {
         return container;
     }
@@ -531,17 +540,34 @@ public class WildFlyContainer {
             managementClient = null;
         }
 
-        getAdministration().reload();
+        try {
+            getAdministration().reload();
+        } catch (Exception e) {
+            if (e.getCause() instanceof java.util.concurrent.TimeoutException) {
+                log.warn("Reload timed out for '{}', retrying with fresh connection", name);
+                managementClient = null;
+                Thread.sleep(5000);
+                getAdministration().waitUntilRunning();
+            } else {
+                throw e;
+            }
+        }
         log.info("Worker '{}' reloaded successfully", name);
     }
 
     /**
      * Reload the server configuration (preserves changes, lighter than full restart).
-     * Reconfigures static proxy and redeploys demo application after reload.
+     * Reconfigures static proxy, applies changes with a second reload, and redeploys demo application.
+     *
+     * <p>The proxy attributes ({@code proxies}, {@code listener}) written by
+     * {@code configureStaticProxy()} are not runtime-effective — they require a server reload.
+     * With Undertow balancers this is transparent because multicast advertise connects the worker
+     * immediately, but httpd balancers depend on the static proxy list, so an extra reload is needed.</p>
      */
     public void reload() throws Exception {
         reloadServer();
         modCluster().configureStaticProxy();
+        reloadServer();
         deployment().deployDemoApp();
     }
 

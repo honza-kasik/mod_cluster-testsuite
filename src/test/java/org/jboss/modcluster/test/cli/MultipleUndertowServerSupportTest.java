@@ -9,6 +9,7 @@ import org.jboss.modcluster.test.base.ModClusterTestExtension;
 import org.jboss.modcluster.test.base.ModClusterTestExtension.TestCluster;
 import org.jboss.modcluster.test.utils.BalancerContainer;
 import org.jboss.modcluster.test.utils.WildFlyContainer;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
@@ -33,9 +34,11 @@ import static java.time.Duration.ofSeconds;
  * Tests support for multiple mod_cluster proxy configurations with listeners on non-default Undertow servers.
  * Verifies that WildFly can register with multiple balancers using independent proxy configurations,
  * and that proxy attribute changes are isolated from each other.
+ * Undertow-only: these tests rely on Undertow server architecture (creating secondary servers/listeners).
  *
  * @see <a href="https://issues.jboss.org/browse/WFLY-6803">WFLY-6803</a>
  */
+@Tag("undertow")
 @ExtendWith({ModClusterTestExtension.class, SoftAssertionsExtension.class})
 public class MultipleUndertowServerSupportTest {
 

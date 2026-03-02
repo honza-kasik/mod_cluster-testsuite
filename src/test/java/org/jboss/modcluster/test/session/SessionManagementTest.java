@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -442,9 +443,13 @@ public class SessionManagementTest {
         log.info("Killing worker: {}", worker);
         workerToKill.kill();
 
-        // Wait for failover - verify custom cookie name still works after failover
+        // Wait for failover - verify custom cookie name still works after failover.
+        // ignoreExceptionsInstanceOf(IOException.class) is needed because httpd mod_proxy_cluster
+        // may hang on the dead worker until ProxyTimeout, causing OkHttp to throw SocketTimeoutException.
+        // Undertow returns 503 immediately (assertion retry), but httpd may time out (IOException retry).
         await().atMost(ofSeconds(30))
             .pollInterval(ofSeconds(2))
+            .ignoreExceptionsInstanceOf(IOException.class)
             .untilAsserted(() -> {
                 final HttpResponse response = httpClient.getWithSession(url, effectiveCookieName + "=" + cookie);
                 assertThat(response.getStatusCode()).isEqualTo(200);
@@ -477,16 +482,16 @@ public class SessionManagementTest {
         final WildFlyContainer survivingWorker = "worker1".equals(worker) ?
             cluster.getWorker2() : cluster.getWorker1();
 
-        if (survivingWorker != null && survivingWorker.getContainer() != null &&
-            survivingWorker.getContainer().isRunning()) {
-            try {
+        try {
+            if (survivingWorker != null && survivingWorker.getContainer() != null &&
+                survivingWorker.getContainer().isRunning()) {
                 final String logs = survivingWorker.getServerLog(100);
                 softly.assertThat(logs)
                     .as("No NullPointerException should occur (JBEAP-5494)")
                     .doesNotContain("NullPointerException");
-            } catch (Exception e) {
-                log.warn("Could not retrieve logs from surviving worker: {}", e.getMessage());
             }
+        } catch (Exception e) {
+            log.warn("Could not retrieve logs from surviving worker: {}", e.getMessage());
         }
 
         log.info("Cookie name test completed successfully for: {}", effectiveCookieName);

@@ -38,15 +38,21 @@ public class LoadBalancingGroupFailoverTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
+        // Wait for both workers to register and receive traffic.
+        // httpd's mod_proxy_cluster needs time to process CONFIG messages from all workers.
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(3))
+                .untilAsserted(() -> {
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 20);
+                    assertThat(dist)
+                            .as("Both workers should receive requests")
+                            .containsKeys("worker1", "worker2");
+                });
+
         // Make 100 requests to test load balancing
         // Connection reuse is disabled in testLoadDistribution for accurate distribution
         Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 100);
 
         log.info("Load distribution: {}", distribution);
-
-        softly.assertThat(distribution)
-                .as("Both workers should receive requests")
-                .containsKeys("worker1", "worker2");
 
         // Verify relatively even distribution (within 30% of each other)
         // Since connection reuse is disabled, we should get good distribution

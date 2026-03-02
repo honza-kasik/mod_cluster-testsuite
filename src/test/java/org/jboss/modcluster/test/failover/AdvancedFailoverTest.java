@@ -12,6 +12,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -69,17 +70,12 @@ public class AdvancedFailoverTest {
         // Wait for failover and verify session still works (may route to other worker)
         await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(3))
+                .ignoreExceptionsInstanceOf(IOException.class)
                 .untilAsserted(() -> {
-                    try {
-                        HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
-                        assertThat(response.getStatusCode())
-                                .as("Session should failover successfully")
-                                .isEqualTo(200);
-                    } catch (Exception e) {
-                        // Allow some failures during transition
-                        log.debug("Failover in progress: {}", e.getMessage());
-                        throw e;
-                    }
+                    HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+                    assertThat(response.getStatusCode())
+                            .as("Session should failover successfully")
+                            .isEqualTo(200);
                 });
 
         log.info("Session failover completed successfully");
@@ -122,16 +118,12 @@ public class AdvancedFailoverTest {
         // Wait for failover and verify session still works
         await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(3))
+                .ignoreExceptionsInstanceOf(IOException.class)
                 .untilAsserted(() -> {
-                    try {
-                        HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
-                        assertThat(response.getStatusCode())
-                                .as("Session should failover after hard kill")
-                                .isEqualTo(200);
-                    } catch (Exception e) {
-                        log.debug("Failover in progress after hard kill: {}", e.getMessage());
-                        throw e;
-                    }
+                    HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+                    assertThat(response.getStatusCode())
+                            .as("Session should failover after hard kill")
+                            .isEqualTo(200);
                 });
 
         log.info("Session failover after hard kill completed successfully");
@@ -174,16 +166,12 @@ public class AdvancedFailoverTest {
         // Wait for failover and verify session still works
         await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(3))
+                .ignoreExceptionsInstanceOf(IOException.class)
                 .untilAsserted(() -> {
-                    try {
-                        HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
-                        assertThat(response.getStatusCode())
-                                .as("Session should failover after undeploy")
-                                .isEqualTo(200);
-                    } catch (Exception e) {
-                        log.debug("Failover in progress after undeploy: {}", e.getMessage());
-                        throw e;
-                    }
+                    HttpResponse response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+                    assertThat(response.getStatusCode())
+                            .as("Session should failover after undeploy")
+                            .isEqualTo(200);
                 });
 
         log.info("Session failover after undeploy completed successfully");
@@ -199,12 +187,17 @@ public class AdvancedFailoverTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
-        // Verify all 4 workers are active
-        Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 40);
-        softly.assertThat(initialDist)
-                .as("All 4 workers should be active initially")
-                .containsKeys("worker1", "worker2", "worker3", "worker4");
+        // Wait for all 4 workers to register and receive traffic.
+        // httpd's mod_proxy_cluster needs time to process CONFIG messages from all workers.
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(3))
+                .untilAsserted(() -> {
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 40);
+                    assertThat(dist)
+                            .as("All 4 workers should be active initially")
+                            .containsKeys("worker1", "worker2", "worker3", "worker4");
+                });
 
+        Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 40);
         log.info("Initial distribution with 4 workers: {}", initialDist);
 
         // Stop worker1 - traffic should deterministically redistribute among remaining 3
@@ -233,18 +226,11 @@ public class AdvancedFailoverTest {
                 .untilAsserted(() -> {
                     Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 20);
                     assertThat(dist)
-                            .as("Traffic should route to remaining 2 workers")
-                            .containsKeys("worker3", "worker4")
-                            .doesNotContainKeys("worker1", "worker2");
+                            .as("Traffic should route to remaining 2 workers only")
+                            .containsOnlyKeys("worker3", "worker4");
                 });
 
-        Map<String, Integer> after2 = httpClient.testLoadDistribution(balancerUrl, 20);
-        log.info("Distribution after worker2 stopped: {}", after2);
-
-        // Verify final deterministic routing to remaining workers
-        softly.assertThat(after2)
-                .as("Deterministic failover should route all traffic to worker3 and worker4")
-                .containsOnlyKeys("worker3", "worker4");
+        log.info("Distribution after worker2 stopped verified: only worker3 and worker4 receive traffic");
 
         log.info("Deterministic failover with 4 workers verified successfully");
     }
@@ -313,12 +299,17 @@ public class AdvancedFailoverTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
-        // Verify both workers receiving traffic
-        Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 20);
-        softly.assertThat(initialDist)
-                .as("Both workers should be active")
-                .containsKeys("worker1", "worker2");
+        // Wait for both workers to register and receive traffic.
+        // httpd's mod_proxy_cluster needs time to process CONFIG messages from all workers.
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(3))
+                .untilAsserted(() -> {
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 20);
+                    assertThat(dist)
+                            .as("Both workers should be active")
+                            .containsKeys("worker1", "worker2");
+                });
 
+        Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 20);
         log.info("Initial distribution: {}", initialDist);
 
         // Gracefully stop worker1 (triggers unregistration)
@@ -417,13 +408,16 @@ public class AdvancedFailoverTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
-        // Verify both workers active
-        Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 20);
-        softly.assertThat(initialDist)
-                .as("Both workers should be active initially")
-                .containsKeys("worker1", "worker2");
+        // Wait for both workers to register and receive traffic
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(3))
+                .untilAsserted(() -> {
+                    Map<String, Integer> dist = httpClient.testLoadDistribution(balancerUrl, 20);
+                    assertThat(dist)
+                            .as("Both workers should be active initially")
+                            .containsKeys("worker1", "worker2");
+                });
 
-        log.info("Initial distribution: {}", initialDist);
+        log.info("Both workers active and receiving traffic");
 
         // Record time when we kill the worker
         long killTime = System.currentTimeMillis();

@@ -8,6 +8,7 @@ import okhttp3.WebSocketListener;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+import org.jboss.modcluster.test.base.BalancerType;
 import org.jboss.modcluster.test.base.ModClusterTestExtension;
 import org.jboss.modcluster.test.base.ModClusterTestExtension.TestCluster;
 import org.jboss.modcluster.test.utils.HttpClient;
@@ -63,7 +64,7 @@ public class WebSocketsTest {
     @Test
     public void testWebSocketInitialConnection(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(1);
-        disableHttp2OnWorker(cluster.getWorker1());
+        disableHttp2IfNeeded(cluster, cluster.getWorker1());
         deployWebSocketApp(cluster.getWorker1());
 
         final String wsUrl = getWebSocketUrl(cluster);
@@ -136,7 +137,7 @@ public class WebSocketsTest {
     @Test
     public void testWebSocketContinuousTransmission(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(1);
-        disableHttp2OnWorker(cluster.getWorker1());
+        disableHttp2IfNeeded(cluster, cluster.getWorker1());
         deployWebSocketApp(cluster.getWorker1());
 
         final String wsUrl = getWebSocketUrl(cluster);
@@ -222,8 +223,8 @@ public class WebSocketsTest {
     @Test
     public void testWebSocketFailover(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
-        disableHttp2OnWorker(cluster.getWorker1());
-        disableHttp2OnWorker(cluster.getWorker2());
+        disableHttp2IfNeeded(cluster, cluster.getWorker1());
+        disableHttp2IfNeeded(cluster, cluster.getWorker2());
         deployWebSocketApp(cluster.getWorker1());
         deployWebSocketApp(cluster.getWorker2());
 
@@ -311,6 +312,21 @@ public class WebSocketsTest {
     }
 
     /**
+     * Disable HTTP/2 on a worker if the balancer is Undertow.
+     * The h2c issue only affects Undertow balancer connections to workers.
+     * httpd uses HTTP/1.1 to backends, so no h2c conflict occurs.
+     *
+     * @param cluster the test cluster (to check balancer type)
+     * @param worker the WildFly worker to conditionally configure
+     * @throws Exception if the configuration or reload fails
+     */
+    private void disableHttp2IfNeeded(final TestCluster cluster, final WildFlyContainer worker) throws Exception {
+        if (cluster.getBalancer().getType() == BalancerType.UNDERTOW) {
+            disableHttp2OnWorker(worker);
+        }
+    }
+
+    /**
      * Disable HTTP/2 on a worker's default HTTP listener and reload.
      * HTTP/2 connections do not support HTTP/1.1 Upgrade, which is required for WebSocket.
      * The balancer's mod_cluster proxy connects to workers via HTTP; if that connection
@@ -319,7 +335,7 @@ public class WebSocketsTest {
      * @param worker the WildFly worker to configure
      * @throws Exception if the configuration or reload fails
      */
-    private void disableHttp2OnWorker(WildFlyContainer worker) throws Exception {
+    private void disableHttp2OnWorker(final WildFlyContainer worker) throws Exception {
         worker.undertow().setHttpListenerEnableHttp2("default-server", "default", false);
         worker.reload();
         log.info("HTTP/2 disabled on worker '{}' for WebSocket support", worker.getName());

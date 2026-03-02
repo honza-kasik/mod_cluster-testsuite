@@ -1,8 +1,5 @@
 package org.jboss.modcluster.test.ha;
 
-import org.assertj.core.api.SoftAssertions;
-import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
-import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.jboss.modcluster.test.base.ModClusterTestExtension;
 import org.jboss.modcluster.test.base.ModClusterTestExtension.TestCluster;
 import org.jboss.modcluster.test.utils.HttpClient;
@@ -13,6 +10,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
@@ -25,13 +23,10 @@ import static java.time.Duration.ofSeconds;
  * Long-running soak test that repeatedly kills and restarts workers to verify cluster stability.
  * Duration is configurable via the system property {@code SOAK_TEST_TIME} (in hours, default 1).
  */
-@ExtendWith({ModClusterTestExtension.class, SoftAssertionsExtension.class})
+@ExtendWith(ModClusterTestExtension.class)
 public class SoakTest {
 
     private static final Logger log = LoggerFactory.getLogger(SoakTest.class);
-
-    @InjectSoftAssertions
-    private SoftAssertions softly;
 
     /**
      * Soak test that continuously kills and restarts workers in a 2-worker cluster,
@@ -99,22 +94,21 @@ public class SoakTest {
             }
 
             // Step 3: Verify failover to surviving worker
+            final String survivingWorkerName = survivingWorker.getName();
             await().atMost(ofSeconds(60))
                     .pollInterval(ofSeconds(3))
+                    .ignoreExceptionsInstanceOf(IOException.class)
                     .untilAsserted(() -> {
                         HttpResponse failoverResponse = httpClient.get(balancerUrl);
                         assertThat(failoverResponse.getStatusCode())
                                 .as("Soak failover should succeed")
                                 .isEqualTo(200);
+                        assertThat(extractWorkerFromResponse(failoverResponse))
+                                .as("Failover should route to surviving worker")
+                                .isEqualTo(survivingWorkerName);
                     });
 
-            final HttpResponse response2 = httpClient.get(balancerUrl);
-            final String failoverWorker = extractWorkerFromResponse(response2);
-            softly.assertThat(failoverWorker)
-                    .as("Soak iteration %d: request should be handled by surviving worker", iteration)
-                    .isNotEqualTo(handlingWorker);
-
-            log.info("Iteration {}: failover to {} successful", iteration, failoverWorker);
+            log.info("Iteration {}: failover to {} successful", iteration, survivingWorkerName);
 
             // Step 4: Restart the stopped worker
             Thread.sleep(5000); // Wait for container cleanup

@@ -13,6 +13,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -202,29 +204,49 @@ public class StickySessionTest {
             worker2.kill();
         }
 
-        // Wait for balancer to detect the dead node via health check (interval: 5s)
-        // but NOT long enough for broken-node-timeout (10s) to remove the node entirely.
-        // If the node is removed, the balancer treats the route as unknown and routes normally.
-        Thread.sleep(7000);
-
-        // Send request with existing session and verify expected status code
-        final HttpResponse failoverResponse;
-        if (useUrlEncodedSession) {
-            // Pass session ID in URL, no Cookie header
-            final String urlWithSession = cluster.getBalancer().getHttpUrl() + "/demo/;jsessionid=" + sessionCookie;
-            failoverResponse = httpClient.get(urlWithSession);
+        // Send request with existing session and verify expected status code.
+        // For force=false (expecting 200), use Awaitility to retry — httpd's mod_proxy_cluster
+        // detects dead workers on-demand (TCP connect failure), so the first request after kill
+        // may timeout or return 503 while httpd marks the dead worker and fails over.
+        // For force=true (expecting 503), a single request suffices since httpd returns 503 immediately.
+        if (expectedStatusCode == 200) {
+            await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                    .ignoreExceptionsInstanceOf(IOException.class)
+                    .untilAsserted(() -> {
+                        final HttpResponse response;
+                        if (useUrlEncodedSession) {
+                            final String urlWithSession = cluster.getBalancer().getHttpUrl()
+                                    + "/demo/;jsessionid=" + sessionCookie;
+                            response = httpClient.get(urlWithSession);
+                        } else {
+                            response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+                        }
+                        assertThat(response.getStatusCode())
+                                .as("Expected HTTP 200 after killing sticky worker (force=%s, urlEncoded=%s)",
+                                        stickySessionForce, useUrlEncodedSession)
+                                .isEqualTo(200);
+                    });
         } else {
-            // Pass session ID in Cookie header
-            failoverResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+            // force=true: wait for balancer to detect dead node, then verify 503
+            Thread.sleep(7000);
+
+            final HttpResponse failoverResponse;
+            if (useUrlEncodedSession) {
+                final String urlWithSession = cluster.getBalancer().getHttpUrl()
+                        + "/demo/;jsessionid=" + sessionCookie;
+                failoverResponse = httpClient.get(urlWithSession);
+            } else {
+                failoverResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
+            }
+
+            softly.assertThat(failoverResponse.getStatusCode())
+                    .as("Expected HTTP 503 after killing sticky worker (force=%s, urlEncoded=%s)",
+                            stickySessionForce, useUrlEncodedSession)
+                    .isEqualTo(503);
         }
 
-        softly.assertThat(failoverResponse.getStatusCode())
-                .as("Expected HTTP %d after killing sticky worker (force=%s, urlEncoded=%s)",
-                        expectedStatusCode, stickySessionForce, useUrlEncodedSession)
-                .isEqualTo(expectedStatusCode);
-
-        log.info("Sticky session test completed: force={}, urlEncoded={}, expectedStatus={}, actualStatus={}",
-                stickySessionForce, useUrlEncodedSession, expectedStatusCode, failoverResponse.getStatusCode());
+        log.info("Sticky session test completed: force={}, urlEncoded={}, expectedStatus={}",
+                stickySessionForce, useUrlEncodedSession, expectedStatusCode);
     }
 
     /**

@@ -33,8 +33,8 @@ public class HttpClient {
 
     public HttpClient() {
         this.client = new OkHttpClient.Builder()
-                .connectTimeout(3, TimeUnit.SECONDS)  // Reduced from 10s for faster failover detection
-                .readTimeout(5, TimeUnit.SECONDS)     // Reduced from 10s
+                .connectTimeout(3, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)    // Must exceed httpd ProxyTimeout*2 for proxy failover
                 .followRedirects(false)
                 .build();
 

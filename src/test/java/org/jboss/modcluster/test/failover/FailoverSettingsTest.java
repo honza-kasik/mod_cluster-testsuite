@@ -8,6 +8,7 @@ import org.jboss.modcluster.test.base.ModClusterTestExtension.TestCluster;
 import org.jboss.modcluster.test.utils.HttpClient;
 import org.jboss.modcluster.test.utils.HttpClient.HttpResponse;
 import org.jboss.modcluster.test.utils.WildFlyContainer;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
@@ -53,7 +54,11 @@ public class FailoverSettingsTest {
      * Sets max-retries=0 on balancer so only the worker's max-attempts governs retries.
      * On Undertow, the effective retry count is max(max-retries, max-attempts).
      * Passes if no workers remain alive after the cascading kill request.
+     *
+     * <p>Undertow-only: httpd's mod_proxy_cluster does not use the max-attempts value
+     * from MCMP CONFIG/STATUS messages for retry routing decisions.</p>
      */
+    @Tag("undertow")
     @Test
     public void testMaxAttemptsAll(TestCluster cluster, HttpClient httpClient) throws Exception {
         doMaxAttemptsRetriesTest(cluster, httpClient, 10, 0, 4, 0);
@@ -65,6 +70,7 @@ public class FailoverSettingsTest {
      * Sets max-attempts=0 on workers so only the balancer's max-retries governs retries.
      * Passes if no workers remain alive after the cascading kill request.
      */
+    @Tag("undertow")
     @Test
     public void testMaxRetriesAll(TestCluster cluster, HttpClient httpClient) throws Exception {
         doMaxAttemptsRetriesTest(cluster, httpClient, 0, 10, 4, 0);
@@ -76,7 +82,11 @@ public class FailoverSettingsTest {
      * Due to non-deterministic TCP connection drops from Runtime.halt(), the balancer may
      * kill 2 or 3 workers (see MODCLUSTER-645 for Undertow vs httpd differences).
      * Passes if 1-2 workers remain alive (2-3 killed out of 4).
+     *
+     * <p>Undertow-only: httpd's mod_proxy_cluster does not use the max-attempts value
+     * from MCMP CONFIG/STATUS messages for retry routing decisions.</p>
      */
+    @Tag("undertow")
     @Test
     public void testMaxAttemptsHalf(TestCluster cluster, HttpClient httpClient) throws Exception {
         doMaxAttemptsRetriesTest(cluster, httpClient, 2, 0, 4, 1, 2);
@@ -88,6 +98,7 @@ public class FailoverSettingsTest {
      * Sets max-attempts=0 on workers so only the balancer's max-retries governs retries.
      * Passes if exactly 2 workers remain alive.
      */
+    @Tag("undertow")
     @Test
     public void testMaxRetriesHalf(TestCluster cluster, HttpClient httpClient) throws Exception {
         doMaxAttemptsRetriesTest(cluster, httpClient, 0, 1, 4, 2);
@@ -109,7 +120,11 @@ public class FailoverSettingsTest {
      * MCMP CONFIG propagation. Sets max-retries=0 on balancer to isolate the max-attempts effect.
      * On Undertow, max-attempts=1 → 1 retry → initial + 1 retry = 2 killed.
      * Passes if exactly 2 workers remain alive.
+     *
+     * <p>Undertow-only: httpd's mod_proxy_cluster does not use the max-attempts value
+     * from MCMP CONFIG/STATUS messages for retry routing decisions.</p>
      */
+    @Tag("undertow")
     @Test
     public void testMaxAttemptsDefault(TestCluster cluster, HttpClient httpClient) throws Exception {
         doMaxAttemptsRetriesTest(cluster, httpClient, 1, 0, 4, 2);
@@ -121,6 +136,7 @@ public class FailoverSettingsTest {
      * On Undertow, max(1, 0) = 1 → initial + 1 retry = 2 killed.
      * Passes if exactly 2 workers remain alive.
      */
+    @Tag("undertow")
     @Test
     public void testMaxRetriesDefault(TestCluster cluster, HttpClient httpClient) throws Exception {
         doMaxAttemptsRetriesTest(cluster, httpClient, 0, -1, 4, 2);
@@ -131,7 +147,11 @@ public class FailoverSettingsTest {
      * when max-retries=0 is set on the balancer. Same as testMaxAttemptsAll but
      * tests the worker-side MCMP advertisement of max-attempts.
      * Passes if no workers remain alive.
+     *
+     * <p>Undertow-only: httpd's mod_proxy_cluster does not use the max-attempts value
+     * from MCMP CONFIG/STATUS messages for retry routing decisions.</p>
      */
+    @Tag("undertow")
     @Test
     public void testMaxAttemptsSystemProperty(TestCluster cluster, HttpClient httpClient) throws Exception {
         doMaxAttemptsRetriesTest(cluster, httpClient, 10, 0, 4, 0);
@@ -145,7 +165,12 @@ public class FailoverSettingsTest {
      * <p>The response should arrive after node-timeout seconds (the balancer cuts off the slow
      * backend) but before the app's sleep completes. Tolerance is +2 seconds per noe-tests.
      * See JBEAP-9624 for known issues with node-timeout on Undertow balancer.</p>
+     *
+     * <p>Undertow-only: httpd's mod_proxy_cluster does not apply the CONFIG message's
+     * Timeout field to per-worker read timeouts. ProxyTimeout is the only way to control
+     * the response read timeout in httpd, and it cannot be set per-worker.</p>
      */
+    @Tag("undertow")
     @Test
     public void testNodeTimeout(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(1);
@@ -283,6 +308,18 @@ public class FailoverSettingsTest {
             for (WildFlyContainer worker : workers) {
                 worker.reload();
             }
+
+            // Wait for all workers to re-register with the balancer after reload.
+            // httpd's mod_proxy_cluster needs time to receive CONFIG messages and
+            // process ENABLE-APP for all contexts. Without this wait, deploying exit.war
+            // may trigger ENABLE-APP before the MCMP connection is re-established.
+            final String demoUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+            await().atMost(ofSeconds(60)).pollInterval(ofSeconds(3))
+                    .untilAsserted(() -> {
+                        HttpResponse resp = httpClient.get(demoUrl);
+                        assertThat(resp.getStatusCode()).isEqualTo(200);
+                    });
+            log.info("All workers re-registered with balancer after max-attempts reload");
         }
 
         // Deploy exit.war to all workers (JSP that halts the JVM)

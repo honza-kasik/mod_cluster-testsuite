@@ -10,11 +10,13 @@ import org.jboss.modcluster.test.utils.HttpClient;
 import org.jboss.modcluster.test.utils.HttpClient.HttpResponse;
 import org.jboss.modcluster.test.utils.WildFlyContainer;
 import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -40,7 +42,11 @@ public class HighAvailabilityTest {
      * Verifies that hot standby worker only receives traffic when all normal workers are down.
      * Configures worker1 as hot standby (load=0) and workers 2-4 as normal workers.
      * Passes if standby receives no traffic until all normal workers are killed.
+     *
+     * <p>Undertow-only: httpd's mod_proxy_cluster propagates load values via periodic STATUS messages,
+     * and its failover algorithm may not respect Load=0 the same way as Undertow's synchronous filter.</p>
      */
+    @Tag("undertow")
     @Test
     public void testHotStandbyActivatesWhenAllWorkersDown(TestCluster cluster, HttpClient httpClient) throws Exception {
         // Start all 4 workers
@@ -90,6 +96,7 @@ public class HighAvailabilityTest {
             // Wait for failover
             await().atMost(ofSeconds(30))
                 .pollInterval(ofSeconds(2))
+                .ignoreExceptionsInstanceOf(IOException.class)
                 .untilAsserted(() -> {
                     final HttpResponse failoverResp = httpClient.getWithSession(url, "JSESSIONID=" + sessionCookie);
                     assertThat(failoverResp.getStatusCode()).isEqualTo(200);
@@ -120,7 +127,11 @@ public class HighAvailabilityTest {
      * Verifies repeated failover behavior with hot standby configuration.
      * Runs 10 cycles of request, identify worker, kill worker, verify standby not used until last iteration.
      * Passes if standby never receives traffic until final iteration when all normal workers are down.
+     *
+     * <p>Undertow-only: httpd's mod_proxy_cluster propagates load values via periodic STATUS messages,
+     * and its failover algorithm may not respect Load=0 the same way as Undertow's synchronous filter.</p>
      */
+    @Tag("undertow")
     @Test
     public void testHotStandbyRepeatedFailover(TestCluster cluster, HttpClient httpClient) throws Exception {
         // Start all 4 workers
@@ -238,6 +249,11 @@ public class HighAvailabilityTest {
      * each group functions independently with sticky sessions.
      * Workers 1-2 register under "balancerXXX1", workers 3-4 under "balancerYYY2".
      * Passes if both balancer groups are visible and sticky sessions work within a group.
+     *
+     * <p>On httpd, workers initially register under the default {@code ManagerBalancerName}.
+     * When their balancer name is changed and they reload, stale context entries from the
+     * old balancer may remain. To prevent routing confusion, the old context entries are
+     * explicitly removed via MCMP REMOVE-APP before the workers re-register.</p>
      */
     @Test
     public void testTwoBalancerSettings(TestCluster cluster, HttpClient httpClient) throws Exception {
@@ -254,6 +270,13 @@ public class HighAvailabilityTest {
         cluster.getWorker3().modCluster().setBalancerName(balancerName2);
         cluster.getWorker4().modCluster().setBalancerName(balancerName2);
 
+        // Remove old context registrations before reload to prevent stale entries
+        // under the default balancer name from interfering with sticky session routing.
+        log.info("Removing old node registrations before balancer group change");
+        for (int i = 1; i <= 4; i++) {
+            cluster.getBalancer().removeNode("worker" + i);
+        }
+
         // Reload all workers to apply balancer name changes
         log.info("Reloading all workers to apply balancer name changes");
         cluster.getWorker1().reload();
@@ -261,21 +284,22 @@ public class HighAvailabilityTest {
         cluster.getWorker3().reload();
         cluster.getWorker4().reload();
 
-        // Wait for all 4 workers to register with the balancer
+        // Wait for all 4 workers to register with the balancer under new names
         log.info("Waiting for all 4 workers to register");
         await().atMost(ofSeconds(60))
             .pollInterval(ofSeconds(5))
             .untilAsserted(() -> {
-                Map<String, org.jboss.dmr.ModelNode> workers = cluster.getBalancer().getWorkerInfo();
+                Map<String, ModelNode> workers = cluster.getBalancer().getWorkerInfo();
                 assertThat(workers).hasSize(4);
             });
 
-        // Assert both balancer groups are present
+        // Assert both balancer groups are present.
+        // httpd normalizes balancer names to lowercase, so compare case-insensitively.
         final List<String> balancerNames = cluster.getBalancer().getBalancerNames();
         log.info("Balancer names: {}", balancerNames);
-        softly.assertThat(balancerNames)
+        softly.assertThat(balancerNames.stream().map(String::toLowerCase).toList())
             .as("Both balancer groups should be registered")
-            .containsExactlyInAnyOrder(balancerName1, balancerName2);
+            .containsExactlyInAnyOrder(balancerName1.toLowerCase(), balancerName2.toLowerCase());
 
         // Verify sticky sessions within a group: establish session and make 10 requests
         final String url = cluster.getBalancer().getHttpUrl() + "/demo/";

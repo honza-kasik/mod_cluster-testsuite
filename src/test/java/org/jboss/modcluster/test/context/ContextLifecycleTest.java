@@ -4,6 +4,7 @@ import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.jboss.dmr.ModelNode;
+import org.jboss.modcluster.test.base.BalancerType;
 import org.jboss.modcluster.test.base.ModClusterTestExtension;
 import org.jboss.modcluster.test.base.ModClusterTestExtension.TestCluster;
 import org.jboss.modcluster.test.utils.HttpClient;
@@ -291,9 +292,17 @@ public class ContextLifecycleTest {
         worker.modCluster().writeModClusterAttribute("excluded-contexts", excludedValue);
 
         // Reload using the same approach as testExcludedContextsNotRegistered:
-        // reloadServer() drops the MCMP connection, broken-node-timeout clears old registrations,
-        // configureStaticProxy() reconnects with the new excluded-contexts in effect.
+        // reloadServer() drops the MCMP connection, configureStaticProxy() reconnects.
         worker.reloadServer();
+
+        // For httpd: explicitly remove the node to clear stale context registrations.
+        // httpd's context table is additive — old contexts persist until removed.
+        // Without this, the old 'demo' context entry remains even though the worker
+        // no longer registers it after reload with excluded-contexts set.
+        if (cluster.getBalancer().getType() == BalancerType.HTTPD) {
+            cluster.getBalancer().removeNode(worker.getName());
+        }
+
         worker.modCluster().configureStaticProxy();
 
         // Verify accessible contexts are registered on the balancer
@@ -483,16 +492,17 @@ public class ContextLifecycleTest {
         cluster.getBalancer().disableLoadBalancingGroup("groupOne");
         Thread.sleep(2000);
 
-        // Verify requests return 503 (no workers available for new sessions)
+        // Verify requests are rejected (no workers available for new sessions).
+        // Undertow returns 503 (Service Unavailable), httpd returns 404 (context not routable).
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode())
-                            .as("Requests to disabled group should return 503")
-                            .isEqualTo(503);
+                            .as("Requests to disabled group should not return 200")
+                            .isIn(404, 503);
                 });
 
-        log.info("Group disabled - requests return 503");
+        log.info("Group disabled - requests rejected");
 
         // Re-enable the group
         cluster.getBalancer().enableLoadBalancingGroup("groupOne");
@@ -542,16 +552,17 @@ public class ContextLifecycleTest {
         cluster.getBalancer().stopLoadBalancingGroup("groupOne");
         Thread.sleep(2000);
 
-        // Verify requests return 503 (no workers available)
+        // Verify requests are rejected (no workers available).
+        // Undertow returns 503 (Service Unavailable), httpd returns 404 (context not routable).
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode())
-                            .as("Requests to stopped group should return 503")
-                            .isEqualTo(503);
+                            .as("Requests to stopped group should not return 200")
+                            .isIn(404, 503);
                 });
 
-        log.info("Group stopped - requests return 503");
+        log.info("Group stopped - requests rejected");
 
         // Re-enable the group
         cluster.getBalancer().enableLoadBalancingGroup("groupOne");

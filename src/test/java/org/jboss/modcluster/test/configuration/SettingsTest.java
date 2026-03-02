@@ -7,6 +7,7 @@ import org.jboss.modcluster.test.base.ModClusterTestExtension;
 import org.jboss.modcluster.test.base.ModClusterTestExtension.TestCluster;
 import org.jboss.modcluster.test.utils.BalancerContainer;
 import org.jboss.modcluster.test.utils.HttpClient;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
@@ -20,7 +21,9 @@ import org.wildfly.extras.creaper.core.online.operations.admin.Administration;
 
 /**
  * Tests for various mod_cluster settings and configuration options.
+ * Undertow-only: tests access the balancer's WildFly management port (9990).
  */
+@Tag("undertow")
 @ExtendWith({ModClusterTestExtension.class, SoftAssertionsExtension.class})
 public class SettingsTest {
 

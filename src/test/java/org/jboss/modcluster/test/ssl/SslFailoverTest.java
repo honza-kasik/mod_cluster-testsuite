@@ -13,6 +13,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
@@ -92,6 +94,7 @@ public class SslFailoverTest {
         // Wait for HTTPS cluster to be functional with certificate validation
         await().atMost(ofSeconds(30))
                 .pollInterval(ofSeconds(3))
+                .ignoreExceptionsInstanceOf(IOException.class)
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.getHttpsTrusted(httpsUrl);
                     assertThat(response.getStatusCode()).isEqualTo(200);
@@ -123,6 +126,7 @@ public class SslFailoverTest {
             // Await HTTPS failover to surviving worker
             await().atMost(ofSeconds(60))
                     .pollInterval(ofSeconds(3))
+                    .ignoreExceptionsInstanceOf(IOException.class)
                     .untilAsserted(() -> {
                         HttpResponse response = httpClient.getHttpsTrustedWithSession(httpsUrl, "JSESSIONID=" + sessionId);
                         assertThat(response.getStatusCode()).isEqualTo(200);

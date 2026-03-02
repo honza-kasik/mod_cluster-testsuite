@@ -7,6 +7,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.utility.MountableFile;
 import org.wildfly.extras.creaper.core.ManagementClient;
 import org.wildfly.extras.creaper.core.online.OnlineManagementClient;
 import org.wildfly.extras.creaper.core.online.OnlineOptions;
@@ -16,10 +17,16 @@ import org.wildfly.extras.creaper.core.online.operations.Values;
 import org.wildfly.extras.creaper.core.online.operations.admin.Administration;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Container wrapper for load balancers (Undertow or httpd with mod_cluster).
@@ -130,10 +137,27 @@ public abstract class BalancerContainer {
     }
 
     /**
+     * Get the internal MCMP management port for this balancer type.
+     * Workers use this port in their outbound-socket-binding to connect to the balancer's MCMP endpoint.
+     *
+     * @return 8080 for Undertow (shares HTTP port), 6666 for httpd (dedicated MCMP port)
+     */
+    public abstract int getInternalMcmpPort();
+
+    /**
+     * Get the internal MCMP port used when SSL/TLS is enabled on the MCMP channel.
+     * On Undertow, MCMP switches from HTTP (8080) to HTTPS (8443) when SSL is enabled.
+     * On httpd, MCMP stays on the same port (6666) with SSL overlaid.
+     *
+     * @return 8443 for Undertow, 6666 for httpd
+     */
+    public abstract int getMcmpSslPort();
+
+    /**
      * Get worker/node information from the balancer.
      * Returns a map of worker names to their runtime information including load.
      */
-    public abstract java.util.Map<String, org.jboss.dmr.ModelNode> getWorkerInfo() throws Exception;
+    public abstract Map<String, org.jboss.dmr.ModelNode> getWorkerInfo() throws Exception;
 
     /**
      * Get the list of balancer group names registered on this balancer.
@@ -169,6 +193,16 @@ public abstract class BalancerContainer {
      * @throws Exception if the operation fails
      */
     public abstract void enableNode(String nodeName) throws Exception;
+
+    /**
+     * Remove all application context registrations for a node from this balancer.
+     * The node will re-register its contexts on the next STATUS/CONFIG cycle.
+     * Used to clear stale context entries when a node changes balancer groups.
+     *
+     * @param nodeName the name of the node to remove
+     * @throws Exception if the operation fails
+     */
+    public abstract void removeNode(String nodeName) throws Exception;
 
     /**
      * Disable a load-balancing group on this balancer.
@@ -266,10 +300,27 @@ public abstract class BalancerContainer {
     public abstract void reload() throws Exception;
 
     /**
+     * Enables SSL on the internal MCMP management client.
+     * Called after mTLS is configured on the MCMP port so that test-code queries
+     * (INFO, DUMP, etc.) use HTTPS. No-op for balancers that don't use MCMP (Undertow).
+     */
+    public abstract void enableMcmpSsl();
+
+    /**
      * Undertow-based mod_cluster balancer.
      * Uses the same WildFly/EAP ZIP as workers, but configured as a load balancer.
      */
     static class UndertowBalancerContainer extends BalancerContainer {
+
+        @Override
+        public int getInternalMcmpPort() {
+            return HTTP_PORT;
+        }
+
+        @Override
+        public int getMcmpSslPort() {
+            return HTTPS_PORT;
+        }
 
         @Override
         public void start() {
@@ -277,7 +328,7 @@ public abstract class BalancerContainer {
             network = Network.newNetwork();
             ownsNetwork = true;
 
-            java.nio.file.Path zipPath = getWildFlyZipPath();
+            Path zipPath = getWildFlyZipPath();
 
             if (zipPath != null && zipPath.toFile().exists()) {
                 log.info("Building Undertow balancer from ZIP: {}", zipPath);
@@ -294,7 +345,7 @@ public abstract class BalancerContainer {
             this.network = network;
             ownsNetwork = false;
 
-            java.nio.file.Path zipPath = getWildFlyZipPath();
+            Path zipPath = getWildFlyZipPath();
 
             if (zipPath != null && zipPath.toFile().exists()) {
                 log.info("Building Undertow balancer from ZIP: {}", zipPath);
@@ -438,8 +489,8 @@ public abstract class BalancerContainer {
         }
 
         @Override
-        public java.util.Map<String, org.jboss.dmr.ModelNode> getWorkerInfo() throws Exception {
-            java.util.Map<String, org.jboss.dmr.ModelNode> workerInfo = new java.util.HashMap<>();
+        public Map<String, org.jboss.dmr.ModelNode> getWorkerInfo() throws Exception {
+            Map<String, org.jboss.dmr.ModelNode> workerInfo = new HashMap<>();
 
             OnlineManagementClient client = ManagementClient.online(
                 OnlineOptions.standalone()
@@ -521,6 +572,16 @@ public abstract class BalancerContainer {
         }
 
         @Override
+        public void removeNode(String nodeName) throws Exception {
+            log.debug("removeNode is a no-op on Undertow balancer (no stale entry issue)");
+        }
+
+        @Override
+        public void enableMcmpSsl() {
+            log.debug("enableMcmpSsl is a no-op on Undertow balancer (uses Creaper, not McmpClient)");
+        }
+
+        @Override
         public void disableLoadBalancingGroup(String groupName) throws Exception {
             invokeGroupOperation(groupName, "disable");
         }
@@ -582,7 +643,7 @@ public abstract class BalancerContainer {
 
         @Override
         public List<String> getRegisteredContexts(String nodeName) throws Exception {
-            java.util.List<String> result = new java.util.ArrayList<>();
+            List<String> result = new ArrayList<>();
 
             OnlineManagementClient client = ManagementClient.online(
                 OnlineOptions.standalone()
@@ -899,110 +960,321 @@ public abstract class BalancerContainer {
     }
 
     /**
-     * Apache httpd with mod_cluster balancer.
+     * Apache httpd with mod_proxy_cluster balancer.
+     * Managed via MCMP (Mod Cluster Management Protocol) on a dedicated port (6666).
      */
     static class HttpdBalancerContainer extends BalancerContainer {
+
+        private McmpClient mcmpClient;
+
+        @Override
+        public int getInternalMcmpPort() {
+            return MCMP_PORT;
+        }
+
+        @Override
+        public int getMcmpSslPort() {
+            return MCMP_PORT;
+        }
 
         @Override
         public void start() {
             type = BalancerType.HTTPD;
             network = Network.newNetwork();
             ownsNetwork = true;
-
-            // Try custom image first, fall back to default
-            String customImage = System.getProperty("balancer.httpd.image");
-            String imageName = customImage != null ? customImage : "quay.io/modcluster/mod_cluster-httpd:latest";
-
-            container = new GenericContainer<>(DockerImageName.parse(imageName))
-                    .withNetwork(network)
-                    .withNetworkAliases("balancer")
-                    .withExposedPorts(HTTP_PORT, HTTPS_PORT, MCMP_PORT)
-                    .waitingFor(Wait.forHttp("/").forPort(HTTP_PORT))
-                    .withLogConsumer(outputFrame -> log.debug("[HTTPD] {}", outputFrame.getUtf8String().trim()));
-
-            container.start();
-            log.info("Httpd balancer started on network: {}", network.getId());
+            startContainer("balancer");
         }
 
         @Override
-        public void start(Network network, String networkAlias) {
-            throw new UnsupportedOperationException(
-                    "Shared network start not yet implemented for httpd balancer.");
+        public void start(final Network network, final String networkAlias) {
+            type = BalancerType.HTTPD;
+            this.network = network;
+            ownsNetwork = false;
+            startContainer(networkAlias);
+        }
+
+        /**
+         * Starts the httpd container with mod_proxy_cluster configuration.
+         * Copies the mod_proxy_cluster.conf into the container and configures httpd
+         * to listen on port 8080 (data) and 6666 (MCMP management).
+         * Includes retry logic for transient Podman socket errors (SIGPIPE).
+         *
+         * @param networkAlias network alias for this container
+         */
+        private void startContainer(final String networkAlias) {
+            final String customImage = System.getProperty("balancer.httpd.image");
+            final String imageName = customImage != null ? customImage : "quay.io/mod_cluster/ci-httpd-dev";
+            final int maxRetries = 5;
+            final java.util.Random random = new java.util.Random();
+            Exception lastException = null;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    container = new GenericContainer<>(DockerImageName.parse(imageName))
+                            .withNetwork(network)
+                            .withNetworkAliases(networkAlias)
+                            .withExposedPorts(HTTP_PORT, HTTPS_PORT, MCMP_PORT)
+                            .withCopyFileToContainer(
+                                    MountableFile.forClasspathResource("httpd/mod_proxy_cluster.conf", 0644),
+                                    "/usr/local/apache2/conf/extra/mod_proxy_cluster.conf")
+                            .withCommand("/bin/sh", "-c",
+                                    // Disable mod_proxy_balancer (conflicts with mod_proxy_cluster),
+                                    // replace default Listen 80 with Listen 8080, include our config, and start httpd
+                                    "sed -i 's/^LoadModule proxy_balancer_module/#LoadModule proxy_balancer_module/' " +
+                                    "/usr/local/apache2/conf/httpd.conf && " +
+                                    "sed -i 's/^\\(Listen 80\\)$/#\\1/' /usr/local/apache2/conf/httpd.conf && " +
+                                    "echo 'Listen 8080' >> /usr/local/apache2/conf/httpd.conf && " +
+                                    "echo 'Include conf/extra/mod_proxy_cluster.conf' >> /usr/local/apache2/conf/httpd.conf && " +
+                                    "echo 'ErrorLog /proc/self/fd/2' >> /usr/local/apache2/conf/httpd.conf && " +
+                                    "echo 'LogLevel info' >> /usr/local/apache2/conf/httpd.conf && " +
+                                    "/usr/local/apache2/bin/httpd -DFOREGROUND")
+                            .waitingFor(Wait.forHttp("/mod_cluster_manager").forPort(MCMP_PORT)
+                                    .withStartupTimeout(Duration.ofMinutes(2)))
+                            .withLogConsumer(outputFrame ->
+                                    log.info("[HTTPD-{}] {}", networkAlias.toUpperCase(),
+                                            outputFrame.getUtf8String().trim()));
+
+                    container.start();
+
+                    mcmpClient = new McmpClient(container.getHost(), container.getMappedPort(MCMP_PORT));
+                    log.info("Httpd balancer '{}' started on network: {}{}",
+                            networkAlias, network.getId(),
+                            attempt > 1 ? " (attempt " + attempt + ")" : "");
+                    return;
+
+                } catch (Exception e) {
+                    lastException = e;
+
+                    if (ContainerUtils.isTransientDockerError(e) && attempt < maxRetries) {
+                        final long baseDelay = attempt * 500L;
+                        final long jitter = 100 + random.nextInt(200);
+                        final long delayMs = baseDelay + jitter;
+
+                        log.warn("Httpd container start failed with transient error on attempt {}/{}, retrying after {}ms",
+                                attempt, maxRetries, delayMs);
+
+                        if (container != null) {
+                            try {
+                                container.close();
+                            } catch (Exception cleanupEx) {
+                                log.debug("Error during cleanup: {}", cleanupEx.getMessage());
+                            }
+                            container = null;
+                        }
+
+                        try {
+                            Thread.sleep(delayMs);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            throw new RuntimeException("Interrupted during retry backoff", ie);
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            throw new RuntimeException("Failed to start httpd balancer '" + networkAlias +
+                    "' after " + maxRetries + " attempts", lastException);
+        }
+
+        /**
+         * Gets the MCMP client, creating it if needed (e.g., after reload).
+         *
+         * @return the MCMP client for this container
+         */
+        private McmpClient getMcmpClient() {
+            if (mcmpClient == null) {
+                mcmpClient = new McmpClient(container.getHost(), container.getMappedPort(MCMP_PORT));
+            }
+            return mcmpClient;
         }
 
         @Override
-        public java.util.Map<String, org.jboss.dmr.ModelNode> getWorkerInfo() throws Exception {
-            throw new UnsupportedOperationException("Worker info querying not yet implemented for httpd balancer. Use mod_cluster_manager web interface instead.");
+        public Map<String, org.jboss.dmr.ModelNode> getWorkerInfo() throws Exception {
+            Map<String, org.jboss.dmr.ModelNode> workerInfo = new HashMap<>();
+
+            String infoResponse = getMcmpClient().sendInfo();
+            List<McmpClient.McmpNodeInfo> nodes = getMcmpClient().parseInfo(infoResponse);
+
+            for (McmpClient.McmpNodeInfo node : nodes) {
+                org.jboss.dmr.ModelNode nodeModel = new org.jboss.dmr.ModelNode();
+                nodeModel.get("load").set(node.load);
+                nodeModel.get("uri").set(node.type + "://" + node.host + ":" + node.port);
+                nodeModel.get("load-balancing-group").set(node.lbGroup != null ? node.lbGroup : "");
+                workerInfo.put(node.name, nodeModel);
+                log.debug("Node '{}' info: load={}, uri={}://{}:{}", node.name, node.load, node.type, node.host, node.port);
+            }
+
+            return workerInfo;
         }
 
         @Override
         public List<String> getBalancerNames() throws Exception {
-            throw new UnsupportedOperationException("Balancer name querying not yet implemented for httpd balancer.");
+            String infoResponse = getMcmpClient().sendInfo();
+            List<McmpClient.McmpNodeInfo> nodes = getMcmpClient().parseInfo(infoResponse);
+
+            Set<String> balancerNames = new LinkedHashSet<>();
+            for (McmpClient.McmpNodeInfo node : nodes) {
+                if (node.balancer != null && !node.balancer.isEmpty()) {
+                    balancerNames.add(node.balancer);
+                }
+            }
+
+            List<String> result = new ArrayList<>(balancerNames);
+            log.debug("Balancer names: {}", result);
+            return result;
         }
 
         @Override
-        public void disableNode(String nodeName) throws Exception {
-            throw new UnsupportedOperationException("Node disable not yet implemented for httpd balancer.");
+        public List<String> getRegisteredContexts(final String nodeName) throws Exception {
+            String infoResponse = getMcmpClient().sendInfo();
+            List<McmpClient.McmpNodeInfo> nodes = getMcmpClient().parseInfo(infoResponse);
+
+            List<String> contexts = new ArrayList<>();
+            for (McmpClient.McmpNodeInfo node : nodes) {
+                if (nodeName.equals(node.name)) {
+                    for (McmpClient.McmpContextInfo ctx : node.contexts) {
+                        contexts.add(ctx.path);
+                    }
+                }
+            }
+
+            return contexts;
         }
 
         @Override
-        public void stopNode(String nodeName) throws Exception {
-            throw new UnsupportedOperationException("Node stop not yet implemented for httpd balancer.");
+        public String getContextStatus(final String nodeName, final String contextPath) throws Exception {
+            String infoResponse = getMcmpClient().sendInfo();
+            List<McmpClient.McmpNodeInfo> nodes = getMcmpClient().parseInfo(infoResponse);
+
+            String normalizedPath = contextPath.startsWith("/") ? contextPath : "/" + contextPath;
+
+            for (McmpClient.McmpNodeInfo node : nodes) {
+                if (nodeName.equals(node.name)) {
+                    for (McmpClient.McmpContextInfo ctx : node.contexts) {
+                        if (normalizedPath.equals(ctx.path)) {
+                            return ctx.status;
+                        }
+                    }
+                }
+            }
+
+            return null;
         }
 
         @Override
-        public void enableNode(String nodeName) throws Exception {
-            throw new UnsupportedOperationException("Node enable not yet implemented for httpd balancer.");
+        public void disableNode(final String nodeName) throws Exception {
+            getMcmpClient().disableNode(nodeName);
         }
 
         @Override
-        public void disableLoadBalancingGroup(String groupName) throws Exception {
-            throw new UnsupportedOperationException("Group disable not yet implemented for httpd balancer.");
+        public void stopNode(final String nodeName) throws Exception {
+            getMcmpClient().stopNode(nodeName);
         }
 
         @Override
-        public void stopLoadBalancingGroup(String groupName) throws Exception {
-            throw new UnsupportedOperationException("Group stop not yet implemented for httpd balancer.");
+        public void enableNode(final String nodeName) throws Exception {
+            getMcmpClient().enableNode(nodeName);
         }
 
         @Override
-        public void enableLoadBalancingGroup(String groupName) throws Exception {
-            throw new UnsupportedOperationException("Group enable not yet implemented for httpd balancer.");
+        public void removeNode(final String nodeName) throws Exception {
+            getMcmpClient().removeNode(nodeName);
         }
 
         @Override
-        public List<String> getRegisteredContexts(String nodeName) throws Exception {
-            throw new UnsupportedOperationException("Registered contexts query not yet implemented for httpd balancer.");
+        public void enableMcmpSsl() {
+            getMcmpClient().enableSsl();
         }
 
         @Override
-        public void disableContext(String nodeName, String contextPath) throws Exception {
-            throw new UnsupportedOperationException("Context disable not yet implemented for httpd balancer.");
+        public void disableContext(final String nodeName, final String contextPath) throws Exception {
+            getMcmpClient().disableApp(nodeName, contextPath, "default-host");
         }
 
         @Override
-        public void stopContext(String nodeName, String contextPath) throws Exception {
-            throw new UnsupportedOperationException("Context stop not yet implemented for httpd balancer.");
+        public void stopContext(final String nodeName, final String contextPath) throws Exception {
+            getMcmpClient().stopApp(nodeName, contextPath, "default-host");
         }
 
         @Override
-        public void enableContext(String nodeName, String contextPath) throws Exception {
-            throw new UnsupportedOperationException("Context enable not yet implemented for httpd balancer.");
+        public void enableContext(final String nodeName, final String contextPath) throws Exception {
+            getMcmpClient().enableApp(nodeName, contextPath, "default-host");
         }
 
         @Override
-        public String getContextStatus(String nodeName, String contextPath) throws Exception {
-            throw new UnsupportedOperationException("Context status not yet implemented for httpd balancer.");
+        public void disableLoadBalancingGroup(final String groupName) throws Exception {
+            List<String> nodesInGroup = findNodesInGroup(groupName);
+            if (nodesInGroup.isEmpty()) {
+                throw new IllegalStateException(
+                        "No nodes found in load-balancing group '" + groupName + "' on balancer");
+            }
+            for (String nodeName : nodesInGroup) {
+                getMcmpClient().disableNode(nodeName);
+            }
+            log.info("Disabled {} nodes in group '{}'", nodesInGroup.size(), groupName);
         }
 
         @Override
-        public void setMaxRetries(int maxRetries) throws Exception {
-            throw new UnsupportedOperationException("Max-retries not yet implemented for httpd balancer.");
+        public void stopLoadBalancingGroup(final String groupName) throws Exception {
+            List<String> nodesInGroup = findNodesInGroup(groupName);
+            if (nodesInGroup.isEmpty()) {
+                throw new IllegalStateException(
+                        "No nodes found in load-balancing group '" + groupName + "' on balancer");
+            }
+            for (String nodeName : nodesInGroup) {
+                getMcmpClient().stopNode(nodeName);
+            }
+            log.info("Stopped {} nodes in group '{}'", nodesInGroup.size(), groupName);
+        }
+
+        @Override
+        public void enableLoadBalancingGroup(final String groupName) throws Exception {
+            List<String> nodesInGroup = findNodesInGroup(groupName);
+            if (nodesInGroup.isEmpty()) {
+                throw new IllegalStateException(
+                        "No nodes found in load-balancing group '" + groupName + "' on balancer");
+            }
+            for (String nodeName : nodesInGroup) {
+                getMcmpClient().enableNode(nodeName);
+            }
+            log.info("Enabled {} nodes in group '{}'", nodesInGroup.size(), groupName);
+        }
+
+        @Override
+        public void setMaxRetries(final int maxRetries) throws Exception {
+            log.warn("setMaxRetries({}) is a no-op on httpd balancer (httpd does not support runtime max-retries)",
+                    maxRetries);
         }
 
         @Override
         public void reload() throws Exception {
-            throw new UnsupportedOperationException("Reload not yet implemented for httpd balancer.");
+            log.info("Reloading httpd balancer (graceful restart)");
+            container.execInContainer("/usr/local/apache2/bin/apachectl", "graceful");
+            // Wait for httpd to finish graceful restart
+            Thread.sleep(2000);
+            log.info("Httpd balancer reloaded successfully");
+        }
+
+        /**
+         * Finds all node names that belong to a specific load-balancing group.
+         *
+         * @param groupName the load-balancing group name to search for
+         * @return list of node names in the group
+         * @throws IOException if MCMP communication fails
+         */
+        private List<String> findNodesInGroup(final String groupName) throws IOException {
+            String infoResponse = getMcmpClient().sendInfo();
+            List<McmpClient.McmpNodeInfo> nodes = getMcmpClient().parseInfo(infoResponse);
+
+            List<String> nodesInGroup = new ArrayList<>();
+            for (McmpClient.McmpNodeInfo node : nodes) {
+                if (groupName.equals(node.lbGroup)) {
+                    nodesInGroup.add(node.name);
+                }
+            }
+            return nodesInGroup;
         }
     }
 }

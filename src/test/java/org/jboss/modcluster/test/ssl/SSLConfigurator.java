@@ -1,6 +1,7 @@
 package org.jboss.modcluster.test.ssl;
 
 import org.jboss.dmr.ModelNode;
+import org.jboss.modcluster.test.base.BalancerType;
 import org.jboss.modcluster.test.utils.BalancerContainer;
 import org.jboss.modcluster.test.utils.ContainerUtils;
 import org.jboss.modcluster.test.utils.WildFlyContainer;
@@ -16,18 +17,22 @@ import org.wildfly.extras.creaper.core.online.operations.Operations;
 import org.wildfly.extras.creaper.core.online.operations.Values;
 import org.wildfly.extras.creaper.core.online.operations.admin.Administration;
 
+import java.io.File;
+import java.net.URL;
+
 /**
- * Configures Elytron SSL/TLS using proper PKI certificates.
- * Copies node-specific server keystores and CA trust chain into containers,
- * then creates Elytron key-store, key-manager, trust-manager, and server-ssl-context
- * resources linked to the Undertow HTTPS listener.
+ * Configures SSL/TLS on both workers and balancers.
  *
- * <p>Supports both workers and balancers. Workers get node-specific server certificates
- * (node1/node2), while the balancer gets the localhost server certificate.</p>
+ * <p>For workers (always WildFly/EAP): uses Elytron to create key-stores, key-managers,
+ * trust-managers, and SSL contexts linked to the Undertow HTTPS listener.</p>
  *
- * <p>Also supports mutual TLS (mTLS) with MCMP-over-SSL for CRL testing scenarios,
- * where both client and server certificates are configured and the mod_cluster
- * management channel communicates via HTTPS.</p>
+ * <p>For balancers: dispatches based on balancer type.
+ * <ul>
+ *   <li><b>Undertow</b>: uses Elytron (same as workers)</li>
+ *   <li><b>httpd</b>: uses mod_ssl with PEM certificates, configured via Apache config files</li>
+ * </ul></p>
+ *
+ * <p>Supports server-only SSL, mutual TLS (mTLS) with MCMP-over-SSL, and CRL enforcement.</p>
  */
 public class SSLConfigurator {
 
@@ -36,9 +41,15 @@ public class SSLConfigurator {
     private static final String KEYSTORE_PASSWORD = "testpass";
     private static final String SSL_DIR = "/opt/wildfly/standalone/configuration/ssl";
     private static final String KEYSTORES_RESOURCE_DIR = "ssl/ca/intermediate/keystores/";
+    private static final String CERTS_RESOURCE_DIR = "ssl/ca/intermediate/certs/";
+    private static final String KEYS_RESOURCE_DIR = "ssl/ca/intermediate/private/";
     private static final String CRL_RESOURCE_PATH = "ssl/ca/intermediate/crl/intermediate.crl.pem";
     private static final int MANAGEMENT_PORT = 9990;
-    private static final int MCMP_HTTPS_PORT = 8443;
+
+    private static final String HTTPD_SSL_DIR = "/usr/local/apache2/ssl";
+    private static final String HTTPD_CONF_EXTRA = "/usr/local/apache2/conf/extra";
+
+    // ---- Worker SSL (always Elytron) ----
 
     /**
      * Configures Elytron SSL on a worker using proper PKI certificates.
@@ -64,48 +75,15 @@ public class SSLConfigurator {
     }
 
     /**
-     * Configures Elytron SSL on an Undertow balancer using the localhost server certificate.
-     * Creates a management client, copies keystores, configures Elytron resources,
-     * links to HTTPS listener, and reloads the server.
-     *
-     * @param balancer balancer container to configure
-     * @throws Exception if configuration fails
-     */
-    public void configureBalancer(final BalancerContainer balancer) throws Exception {
-        log.info("Configuring SSL on balancer");
-
-        copyKeystores(balancer.getContainer(), "balancer");
-
-        try (OnlineManagementClient client = ManagementClient.online(
-                OnlineOptions.standalone()
-                        .hostAndPort(balancer.getContainer().getHost(),
-                                balancer.getContainer().getMappedPort(MANAGEMENT_PORT))
-                        .auth("admin", "admin")
-                        .connectionTimeout(30000)
-                        .build())) {
-            final Operations ops = new Operations(client);
-            createElytronResources(ops);
-            linkToHttpsListener(ops);
-
-            new Administration(client).reload();
-        }
-
-        log.info("SSL configured successfully on balancer");
-    }
-
-    /**
      * Configures full mutual TLS and MCMP-over-SSL on a worker.
      * Copies server, client, and trust keystores into the container, creates Elytron resources
      * for both server and client SSL contexts with {@code need-client-auth=true},
      * links the server SSL context to the HTTPS listener, and switches the mod_cluster
-     * proxy's MCMP management channel to use TLS on port 8443 (the balancer's HTTPS listener).
+     * proxy's MCMP management channel to use TLS on the balancer's MCMP SSL port.
      *
      * <p>The worker's listener stays as "default" (HTTP) so the balancer's health-check and
      * proxy connections go to the worker's plain HTTP port. Only the MCMP management channel
      * (worker → balancer) uses TLS, which is where CRL enforcement takes effect.</p>
-     *
-     * <p>All management model changes (Elytron, HTTPS listener, mod_cluster attributes,
-     * socket binding port) are written before the reload so the server boots with them.</p>
      *
      * @param worker worker container to configure
      * @param serverKeystore server keystore name prefix (e.g., "node1.server" or "node4.server")
@@ -125,59 +103,22 @@ public class SSLConfigurator {
 
         // Write MCMP-over-SSL settings to management model BEFORE reload —
         // socket binding port changes only take effect after a reload.
-        // listener stays "default" (HTTP) so the balancer's health-check connections
-        // to workers use plain HTTP. TLS is only needed on the MCMP management channel
-        // (worker → balancer), controlled by ssl-context below.
         final Address mcProxy = Address.subsystem("modcluster").and("proxy", "default");
         ops.writeAttribute(mcProxy, "ssl-context", "clientSSLContext").assertSuccess();
 
+        // Use balancer-type-specific MCMP SSL port (8443 for Undertow, 6666 for httpd)
+        int mcmpSslPort = worker.getBalancer().getMcmpSslPort();
         final Address outboundSocket = Address.of("socket-binding-group", "standard-sockets")
                 .and("remote-destination-outbound-socket-binding", "modcluster-balancer");
-        ops.writeAttribute(outboundSocket, "port", MCMP_HTTPS_PORT).assertSuccess();
+        ops.writeAttribute(outboundSocket, "port", mcmpSslPort).assertSuccess();
 
         // Also set on the manager so any future reload() calls preserve these settings
-        worker.modCluster().setMcmpSslConfig("default", MCMP_HTTPS_PORT, "clientSSLContext");
+        worker.modCluster().setMcmpSslConfig("default", mcmpSslPort, "clientSSLContext");
 
         // reloadServer() applies all changes without re-running configureStaticProxy()
         worker.reloadServer();
 
         log.info("mTLS + MCMP-over-SSL configured successfully on worker '{}'", worker.getName());
-    }
-
-    /**
-     * Configures full mutual TLS and MCMP-over-SSL on the Undertow balancer.
-     * Copies server, client, and trust keystores, creates Elytron resources with
-     * {@code need-client-auth=true}, links the server SSL context to the HTTPS listener,
-     * and switches the mod_cluster filter's management channel to the HTTPS socket binding.
-     *
-     * @param balancer balancer container to configure
-     * @param serverKeystore server keystore name prefix (e.g., "node2.server")
-     * @param clientKeystore client keystore name prefix (e.g., "node2.client")
-     * @throws Exception if configuration fails
-     */
-    public void configureMtlsBalancer(final BalancerContainer balancer, final String serverKeystore,
-                                       final String clientKeystore) throws Exception {
-        log.info("Configuring mTLS + MCMP-over-SSL on balancer (server={}, client={})",
-                serverKeystore, clientKeystore);
-
-        copyMtlsKeystores(balancer.getContainer(), serverKeystore, clientKeystore);
-
-        try (OnlineManagementClient client = ManagementClient.online(
-                OnlineOptions.standalone()
-                        .hostAndPort(balancer.getContainer().getHost(),
-                                balancer.getContainer().getMappedPort(MANAGEMENT_PORT))
-                        .auth("admin", "admin")
-                        .connectionTimeout(30000)
-                        .build())) {
-            final Operations ops = new Operations(client);
-            createMtlsElytronResources(ops);
-            linkToHttpsListener(ops);
-            configureMcmpOverSslOnBalancer(ops);
-
-            new Administration(client).reload();
-        }
-
-        log.info("mTLS + MCMP-over-SSL configured successfully on balancer");
     }
 
     /**
@@ -203,17 +144,116 @@ public class SSLConfigurator {
         log.info("CRL added successfully to worker '{}'", worker.getName());
     }
 
+    // ---- Balancer SSL (dispatched by type) ----
+
     /**
-     * Adds a Certificate Revocation List (CRL) to the trust-manager on the balancer.
-     * Copies the CRL file into the container, configures the trust-manager to use it,
-     * and reloads the server to force existing TLS connections to drop.
-     * Workers reconnect with a new TLS handshake that checks the CRL.
+     * Configures SSL on the balancer's data path (port 8443).
+     * Dispatches to Undertow Elytron or httpd mod_ssl based on balancer type.
+     *
+     * @param balancer balancer container to configure
+     * @throws Exception if configuration fails
+     */
+    public void configureBalancer(final BalancerContainer balancer) throws Exception {
+        if (balancer.getType() == BalancerType.HTTPD) {
+            configureHttpdBalancerSsl(balancer);
+        } else {
+            configureUndertowBalancerSsl(balancer);
+        }
+    }
+
+    /**
+     * Configures mutual TLS (mTLS) and MCMP-over-SSL on the balancer.
+     * Dispatches to Undertow Elytron or httpd mod_ssl based on balancer type.
+     *
+     * @param balancer balancer container to configure
+     * @param serverKeystore server keystore name prefix (e.g., "node2.server")
+     * @param clientKeystore client keystore name prefix (e.g., "node2.client")
+     * @throws Exception if configuration fails
+     */
+    public void configureMtlsBalancer(final BalancerContainer balancer, final String serverKeystore,
+                                       final String clientKeystore) throws Exception {
+        if (balancer.getType() == BalancerType.HTTPD) {
+            configureHttpdMtlsBalancer(balancer, serverKeystore, clientKeystore);
+        } else {
+            configureUndertowMtlsBalancer(balancer, serverKeystore, clientKeystore);
+        }
+    }
+
+    /**
+     * Adds a Certificate Revocation List (CRL) to the balancer.
+     * Dispatches to Undertow Elytron or httpd mod_ssl based on balancer type.
      *
      * @param balancer balancer container to add CRL to
      * @throws Exception if configuration fails
      */
     public void addCrlToBalancer(final BalancerContainer balancer) throws Exception {
-        log.info("Adding CRL to balancer");
+        if (balancer.getType() == BalancerType.HTTPD) {
+            addCrlToHttpdBalancer(balancer);
+        } else {
+            addCrlToUndertowBalancer(balancer);
+        }
+    }
+
+    // ---- Undertow balancer SSL (Elytron) ----
+
+    /**
+     * Configures Elytron SSL on an Undertow balancer using the localhost server certificate.
+     */
+    private void configureUndertowBalancerSsl(final BalancerContainer balancer) throws Exception {
+        log.info("Configuring SSL on Undertow balancer");
+
+        copyKeystores(balancer.getContainer(), "balancer");
+
+        try (OnlineManagementClient client = ManagementClient.online(
+                OnlineOptions.standalone()
+                        .hostAndPort(balancer.getContainer().getHost(),
+                                balancer.getContainer().getMappedPort(MANAGEMENT_PORT))
+                        .auth("admin", "admin")
+                        .connectionTimeout(30000)
+                        .build())) {
+            final Operations ops = new Operations(client);
+            createElytronResources(ops);
+            linkToHttpsListener(ops);
+
+            new Administration(client).reload();
+        }
+
+        log.info("SSL configured successfully on Undertow balancer");
+    }
+
+    /**
+     * Configures mTLS + MCMP-over-SSL on an Undertow balancer.
+     */
+    private void configureUndertowMtlsBalancer(final BalancerContainer balancer, final String serverKeystore,
+                                                final String clientKeystore) throws Exception {
+        log.info("Configuring mTLS + MCMP-over-SSL on Undertow balancer (server={}, client={})",
+                serverKeystore, clientKeystore);
+
+        copyMtlsKeystores(balancer.getContainer(), serverKeystore, clientKeystore);
+
+        try (OnlineManagementClient client = ManagementClient.online(
+                OnlineOptions.standalone()
+                        .hostAndPort(balancer.getContainer().getHost(),
+                                balancer.getContainer().getMappedPort(MANAGEMENT_PORT))
+                        .auth("admin", "admin")
+                        .connectionTimeout(30000)
+                        .build())) {
+            final Operations ops = new Operations(client);
+            createMtlsElytronResources(ops);
+            linkToHttpsListener(ops);
+            configureMcmpOverSslOnUndertowBalancer(ops);
+
+            new Administration(client).reload();
+        }
+
+        log.info("mTLS + MCMP-over-SSL configured successfully on Undertow balancer");
+    }
+
+    /**
+     * Adds CRL to an Undertow balancer via Elytron trust-manager.
+     */
+    private void addCrlToUndertowBalancer(final BalancerContainer balancer) throws Exception {
+        log.info("Adding CRL to Undertow balancer");
 
         copyFileWithRetry(balancer.getContainer(), CRL_RESOURCE_PATH, SSL_DIR + "/intermediate.crl.pem");
 
@@ -227,14 +267,255 @@ public class SSLConfigurator {
             final Operations ops = new Operations(client);
             writeCrlAttribute(ops);
 
-            // Reload to drop existing TLS connections — new handshakes will check the CRL
             new Administration(client).reload();
         }
 
-        log.info("CRL added successfully to balancer");
+        log.info("CRL added successfully to Undertow balancer");
     }
 
-    // ---- Private helpers for server-only SSL (existing) ----
+    // ---- httpd balancer SSL (mod_ssl with PEM certs) ----
+
+    /**
+     * Configures SSL on an httpd balancer's data path (port 8443).
+     * Copies PEM certificates into the container, strips key passphrase,
+     * writes an Apache SSL config, and performs a graceful restart.
+     */
+    private void configureHttpdBalancerSsl(final BalancerContainer balancer) throws Exception {
+        log.info("Configuring SSL on httpd balancer (data path)");
+
+        GenericContainer<?> container = balancer.getContainer();
+
+        // Copy PEM certificates into container
+        String certPrefix = "localhost.server";
+        copyPemCerts(container, certPrefix);
+
+        // Strip key passphrase (httpd needs unencrypted key)
+        stripKeyPassphrase(container, certPrefix);
+
+        // Write SSL VirtualHost config for data path (port 8443)
+        String sslConfig =
+                "LoadModule ssl_module modules/mod_ssl.so\n" +
+                "Listen 8443\n" +
+                "<VirtualHost *:8443>\n" +
+                "    SSLEngine on\n" +
+                "    SSLCertificateFile " + HTTPD_SSL_DIR + "/server.cert.pem\n" +
+                "    SSLCertificateKeyFile " + HTTPD_SSL_DIR + "/server.nopass.key.pem\n" +
+                "    SSLCACertificateFile " + HTTPD_SSL_DIR + "/ca-chain.cert.pem\n" +
+                "</VirtualHost>\n";
+
+        writeConfigToContainer(container, sslConfig, HTTPD_CONF_EXTRA + "/ssl-data.conf");
+
+        // Graceful restart to pick up SSL config
+        balancer.reload();
+
+        log.info("SSL configured successfully on httpd balancer");
+    }
+
+    /**
+     * Configures mTLS on an httpd balancer (both MCMP port 6666 and data path 8443).
+     * SSLVerifyClient require forces client certificate authentication.
+     */
+    private void configureHttpdMtlsBalancer(final BalancerContainer balancer, final String serverKeystore,
+                                             final String clientKeystore) throws Exception {
+        log.info("Configuring mTLS on httpd balancer (server={}, client={})", serverKeystore, clientKeystore);
+
+        GenericContainer<?> container = balancer.getContainer();
+
+        // Copy PEM certificates (use the server keystore prefix to find cert/key)
+        copyPemCerts(container, serverKeystore);
+
+        // Strip key passphrase
+        stripKeyPassphrase(container, serverKeystore);
+
+        // Comment out the non-SSL VirtualHost on port 6666 in mod_proxy_cluster.conf.
+        // Apache cannot mix SSL and non-SSL VirtualHosts on the same port — the non-SSL
+        // VirtualHost would be matched first and reject SSL connections from workers.
+        container.execInContainer("sh", "-c",
+                "sed -i '/<VirtualHost \\*:6666>/,/<\\/VirtualHost>/s/^/#/' " +
+                "/usr/local/apache2/conf/extra/mod_proxy_cluster.conf");
+
+        // Write SSL config for mTLS on both MCMP (6666) and data path (8443).
+        // MCMP port uses SSLVerifyClient optional — workers present client certs (validated
+        // against CA chain and CRL), but the test-code McmpClient can query without one.
+        // Data path uses SSLVerifyClient require — clients must present a valid client cert.
+        String sslConfig =
+                "LoadModule ssl_module modules/mod_ssl.so\n" +
+                "Listen 8443\n" +
+                "\n" +
+                "# MCMP mTLS on port 6666 (replaces the non-SSL VirtualHost)\n" +
+                "<VirtualHost *:6666>\n" +
+                "    SSLEngine on\n" +
+                "    SSLCertificateFile " + HTTPD_SSL_DIR + "/server.cert.pem\n" +
+                "    SSLCertificateKeyFile " + HTTPD_SSL_DIR + "/server.nopass.key.pem\n" +
+                "    SSLCACertificateFile " + HTTPD_SSL_DIR + "/ca-chain.cert.pem\n" +
+                "    SSLVerifyClient optional\n" +
+                "    SSLVerifyDepth 3\n" +
+                "    EnableMCMPReceive\n" +
+                "    <Location />\n" +
+                "        Require all granted\n" +
+                "    </Location>\n" +
+                "    <Location /mod_cluster_manager>\n" +
+                "        SetHandler mod_cluster-manager\n" +
+                "        Require all granted\n" +
+                "    </Location>\n" +
+                "</VirtualHost>\n" +
+                "\n" +
+                "# Data path mTLS on port 8443\n" +
+                "<VirtualHost *:8443>\n" +
+                "    SSLEngine on\n" +
+                "    SSLCertificateFile " + HTTPD_SSL_DIR + "/server.cert.pem\n" +
+                "    SSLCertificateKeyFile " + HTTPD_SSL_DIR + "/server.nopass.key.pem\n" +
+                "    SSLCACertificateFile " + HTTPD_SSL_DIR + "/ca-chain.cert.pem\n" +
+                "    SSLVerifyClient require\n" +
+                "    SSLVerifyDepth 3\n" +
+                "</VirtualHost>\n";
+
+        writeConfigToContainer(container, sslConfig, HTTPD_CONF_EXTRA + "/ssl-mtls.conf");
+
+        // Graceful restart to pick up mTLS config
+        balancer.reload();
+
+        // Switch the internal McmpClient to HTTPS so test-code queries work on the SSL port
+        balancer.enableMcmpSsl();
+
+        log.info("mTLS configured successfully on httpd balancer");
+    }
+
+    /**
+     * Adds CRL to an httpd balancer by appending SSLCARevocationFile directives
+     * and performing a graceful restart.
+     */
+    private void addCrlToHttpdBalancer(final BalancerContainer balancer) throws Exception {
+        log.info("Adding CRL to httpd balancer");
+
+        GenericContainer<?> container = balancer.getContainer();
+
+        // Copy CRL file into container
+        copyFileWithRetry(container, CRL_RESOURCE_PATH, HTTPD_SSL_DIR + "/intermediate.crl.pem");
+
+        // Write CRL config that applies to all SSL VirtualHosts.
+        // Use 'leaf' mode because we only have the intermediate CA's CRL, not the root CA's.
+        // 'chain' mode would reject ALL certs because the root CA CRL is missing.
+        String crlConfig =
+                "# CRL configuration (applied globally)\n" +
+                "SSLCARevocationFile " + HTTPD_SSL_DIR + "/intermediate.crl.pem\n" +
+                "SSLCARevocationCheck leaf\n";
+
+        writeConfigToContainer(container, crlConfig, HTTPD_CONF_EXTRA + "/ssl-crl.conf");
+
+        // Graceful restart to force new TLS handshakes with CRL checking
+        balancer.reload();
+
+        log.info("CRL added successfully to httpd balancer");
+    }
+
+    // ---- httpd SSL helpers ----
+
+    /**
+     * Copies PEM certificate, key, and CA chain files into the httpd container.
+     *
+     * @param container the httpd container
+     * @param certPrefix certificate name prefix (e.g., "localhost.server", "node2.server")
+     */
+    private void copyPemCerts(final GenericContainer<?> container, final String certPrefix) {
+        String certResource = CERTS_RESOURCE_DIR + certPrefix + ".cert.pem";
+        String keyResource = KEYS_RESOURCE_DIR + certPrefix + ".key.pem";
+        String caChainResource = CERTS_RESOURCE_DIR + "ca-chain.cert.pem";
+
+        // Create SSL directory in container
+        try {
+            container.execInContainer("mkdir", "-p", HTTPD_SSL_DIR);
+        } catch (Exception e) {
+            log.debug("SSL dir may already exist: {}", e.getMessage());
+        }
+
+        log.debug("Copying server cert '{}' to httpd container", certResource);
+        copyFileWithRetry(container, certResource, HTTPD_SSL_DIR + "/server.cert.pem");
+
+        log.debug("Copying server key '{}' to httpd container", keyResource);
+        copyFileWithRetry(container, keyResource, HTTPD_SSL_DIR + "/server.key.pem");
+
+        log.debug("Copying CA chain to httpd container");
+        copyFileWithRetry(container, caChainResource, HTTPD_SSL_DIR + "/ca-chain.cert.pem");
+    }
+
+    /**
+     * Strips the passphrase from the server key using openssl.
+     * httpd mod_ssl requires unencrypted keys (or SSLPassPhraseDialog which is harder to automate).
+     *
+     * <p>First attempts to run openssl inside the container. If the container lacks openssl,
+     * falls back to running openssl on the host and copying the unencrypted key into the container.</p>
+     *
+     * @param container the httpd container
+     * @param certPrefix the certificate prefix (e.g., "localhost.server", "node2.server")
+     * @throws Exception if stripping fails both in-container and on the host
+     */
+    private void stripKeyPassphrase(final GenericContainer<?> container, final String certPrefix) throws Exception {
+        // Try in-container first (some images include openssl)
+        org.testcontainers.containers.Container.ExecResult result = container.execInContainer(
+                "openssl", "rsa",
+                "-in", HTTPD_SSL_DIR + "/server.key.pem",
+                "-out", HTTPD_SSL_DIR + "/server.nopass.key.pem",
+                "-passin", "pass:" + KEYSTORE_PASSWORD);
+
+        if (result.getExitCode() == 0) {
+            log.debug("Key passphrase stripped in container");
+            return;
+        }
+
+        log.info("Container lacks openssl, stripping passphrase on host");
+
+        String keyResource = KEYS_RESOURCE_DIR + certPrefix + ".key.pem";
+        URL keyUrl = Thread.currentThread().getContextClassLoader().getResource(keyResource);
+        if (keyUrl == null) {
+            throw new RuntimeException("Cannot find key resource '" + keyResource + "' on classpath");
+        }
+
+        File tempKey = File.createTempFile("server-nopass", ".key.pem");
+        tempKey.deleteOnExit();
+
+        ProcessBuilder pb = new ProcessBuilder(
+                "openssl", "rsa",
+                "-in", new File(keyUrl.toURI()).getAbsolutePath(),
+                "-out", tempKey.getAbsolutePath(),
+                "-passin", "pass:" + KEYSTORE_PASSWORD);
+        pb.redirectErrorStream(true);
+        Process proc = pb.start();
+        int exitCode = proc.waitFor();
+
+        if (exitCode != 0) {
+            String output = new String(proc.getInputStream().readAllBytes());
+            throw new RuntimeException("Failed to strip key passphrase on host: " + output);
+        }
+
+        container.copyFileToContainer(
+                MountableFile.forHostPath(tempKey.getAbsolutePath(), 0644),
+                HTTPD_SSL_DIR + "/server.nopass.key.pem");
+        tempKey.delete();
+        log.debug("Key passphrase stripped on host and copied to container");
+    }
+
+    /**
+     * Writes a configuration string to a file inside the container.
+     *
+     * @param container the target container
+     * @param content the configuration content
+     * @param containerPath the destination file path inside the container
+     * @throws Exception if writing fails
+     */
+    private void writeConfigToContainer(final GenericContainer<?> container, final String content,
+                                         final String containerPath) throws Exception {
+        // Use sh -c with heredoc to write the config file
+        org.testcontainers.containers.Container.ExecResult result = container.execInContainer(
+                "sh", "-c", "cat > " + containerPath + " << 'SSLEOF'\n" + content + "SSLEOF");
+
+        if (result.getExitCode() != 0) {
+            throw new RuntimeException("Failed to write config to " + containerPath + ": " + result.getStderr());
+        }
+        log.debug("Config written to {}", containerPath);
+    }
+
+    // ---- Private helpers for keystore operations ----
 
     private static final int MAX_COPY_RETRIES = 3;
     private static final long COPY_RETRY_DELAY_MS = 500;
@@ -500,23 +781,17 @@ public class SSLConfigurator {
         ops.writeAttribute(httpsListenerAddr, "ssl-context", "serverSSLContext").assertSuccess();
     }
 
-    // ---- MCMP-over-SSL configuration ----
+    // ---- MCMP-over-SSL configuration for Undertow ----
 
     /**
-     * Switches the mod_cluster filter's management channel from HTTP to HTTPS.
+     * Switches the mod_cluster filter's management channel from HTTP to HTTPS on Undertow.
      * Changes the {@code management-socket-binding} from {@code http} (port 8080)
-     * to {@code https} (port 8443) so the management handler shares the HTTPS listener's socket.
-     * Sets {@code ssl-context=clientSSLContext} on the filter for outbound connections,
-     * while inbound TLS is handled by the HTTPS listener's {@code serverSSLContext}.
-     *
-     * <p>This matches the noe-tests approach: the HTTPS listener handles TLS termination
-     * (with {@code need-client-auth=true}), and the mod_cluster management handler
-     * processes MCMP requests on the decrypted channel.</p>
+     * to {@code https} (port 8443).
      *
      * @param ops Creaper operations handle
      * @throws Exception if any management operation fails
      */
-    private void configureMcmpOverSslOnBalancer(final Operations ops) throws Exception {
+    private void configureMcmpOverSslOnUndertowBalancer(final Operations ops) throws Exception {
         final Address filterAddr = Address.subsystem("undertow")
                 .and("configuration", "filter")
                 .and("mod-cluster", "modcluster");
@@ -530,7 +805,7 @@ public class SSLConfigurator {
         log.info("MCMP management channel switched to HTTPS socket binding with clientSSLContext");
     }
 
-    // ---- CRL configuration ----
+    // ---- CRL configuration for Elytron ----
 
     /**
      * Writes the certificate-revocation-list attribute on the trust-manager

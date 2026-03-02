@@ -12,6 +12,8 @@ import org.wildfly.extras.creaper.core.online.operations.Values;
 
 import java.io.IOException;
 
+import org.jboss.modcluster.test.base.BalancerType;
+
 /**
  * Manages ModCluster subsystem configuration for WildFly containers.
  * Handles proxy configuration and attribute management.
@@ -23,7 +25,7 @@ public class WildFlyModClusterManager {
     private final WildFlyContainer container;
 
     private String mcmpListener = "default";
-    private int mcmpPort = 8080;
+    private int mcmpPort = -1;
     private String mcmpSslContext;
 
     WildFlyModClusterManager(WildFlyContainer container) {
@@ -56,8 +58,13 @@ public class WildFlyModClusterManager {
             OnlineManagementClient client = container.getManagementClient();
             Operations ops = container.getOperations();
 
+            // Determine effective MCMP port:
+            // If mcmpPort was explicitly set via setMcmpSslConfig(), use that value.
+            // Otherwise, use the balancer's internal MCMP port (8080 for Undertow, 6666 for httpd).
+            int effectiveMcmpPort = (mcmpPort >= 0) ? mcmpPort : container.getBalancer().getInternalMcmpPort();
+
             // Step 1: Create outbound-socket-binding to balancer
-            log.info("Creating outbound-socket-binding for balancer (port={})", mcmpPort);
+            log.info("Creating outbound-socket-binding for balancer (port={})", effectiveMcmpPort);
 
             Address socketBindingAddr = Address.of("socket-binding-group", "standard-sockets")
                     .and("remote-destination-outbound-socket-binding", "modcluster-balancer");
@@ -68,17 +75,15 @@ public class WildFlyModClusterManager {
             address.add("remote-destination-outbound-socket-binding", "modcluster-balancer");
             addSocketBinding.get("operation").set("add");
             addSocketBinding.get("host").set("balancer");
-            addSocketBinding.get("port").set(mcmpPort);
+            addSocketBinding.get("port").set(effectiveMcmpPort);
 
             ModelNode result = client.execute(addSocketBinding);
             if (!result.get("outcome").asString().equals("success")) {
                 log.debug("Socket binding may already exist: {}", result.get("failure-description").asString());
 
-                // If it already exists and port differs from default, update it
-                if (mcmpPort != 8080) {
-                    ops.writeAttribute(socketBindingAddr, "port", mcmpPort).assertSuccess();
-                    log.info("Updated existing socket binding port to {}", mcmpPort);
-                }
+                // Update the existing binding to the correct port
+                ops.writeAttribute(socketBindingAddr, "port", effectiveMcmpPort).assertSuccess();
+                log.info("Updated existing socket binding port to {}", effectiveMcmpPort);
             }
 
             // Step 2: Set proxy list to use the outbound-socket-binding
@@ -95,7 +100,32 @@ public class WildFlyModClusterManager {
                 ops.writeAttribute(mcProxyAddress, "listener", mcmpListener);
             listenerResult.assertSuccess();
 
-            // Step 4: Set SSL context on mod_cluster proxy if configured
+            // Step 4: Tune mod_cluster attributes for httpd balancers
+            if (container.getBalancer().getType() == BalancerType.HTTPD) {
+                // The 'ping' attribute controls two mod_proxy_cluster worker timeouts:
+                //   conn_timeout — TCP connect timeout to backend (how long to wait for SYN-ACK)
+                //   ping_timeout — CPING/CPONG health check timeout before forwarding a request
+                // Default is 10 seconds, which is too long for failover — httpd hangs on TCP connect
+                // to a dead worker for 10s, exceeding the HTTP client's read timeout.
+                // 3 seconds gives fast failover while still tolerating normal network latency.
+                ops.writeAttribute(mcProxyAddress, "ping", 3).assertSuccess();
+
+                // WildFly defaults max-attempts to 1, which means mod_proxy_cluster only tries one
+                // backend per request — no failover to other workers when the sticky target is down.
+                // Only override the WildFly default (1); tests may have set a specific value
+                // (including 0) that should not be overridden by the reload's configureStaticProxy() call.
+                ModelNodeResult currentMaxAttempts = ops.readAttribute(mcProxyAddress, "max-attempts");
+                currentMaxAttempts.assertSuccess();
+                if (currentMaxAttempts.intValue() == 1) {
+                    ops.writeAttribute(mcProxyAddress, "max-attempts", 3).assertSuccess();
+                    log.info("Set max-attempts=3, ping=3 for httpd failover on worker '{}'", container.getName());
+                } else {
+                    log.info("Set ping=3 for httpd failover on worker '{}' (max-attempts={} preserved)",
+                            container.getName(), currentMaxAttempts.intValue());
+                }
+            }
+
+            // Step 5: Set SSL context on mod_cluster proxy if configured
             if (mcmpSslContext != null) {
                 ModelNodeResult sslResult =
                     ops.writeAttribute(mcProxyAddress, "ssl-context", mcmpSslContext);
@@ -104,7 +134,7 @@ public class WildFlyModClusterManager {
             }
 
             log.info("Mod_cluster static proxy configured successfully on worker '{}' (listener='{}', port={})",
-                    container.getName(), mcmpListener, mcmpPort);
+                    container.getName(), mcmpListener, effectiveMcmpPort);
 
             // Wait for the proxy connection to establish
             Thread.sleep(5000);
