@@ -48,15 +48,16 @@ public class ContinuousRequestRunner {
      * @return Future containing request results when complete
      */
     public Future<RequestResult> startAsync(final Duration duration, final Duration interval) {
-        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+        final ExecutorService executor = Executors.newSingleThreadExecutor();
 
-            return executor.submit(() -> {
-                final RequestResult result = new RequestResult();
-                final long endTime = System.currentTimeMillis() + duration.toMillis();
-                String lastSessionId = extractSessionIdOnly(currentCookie);
+        return executor.submit(() -> {
+            final RequestResult result = new RequestResult();
+            final long endTime = System.currentTimeMillis() + duration.toMillis();
+            String lastSessionId = extractSessionIdOnly(currentCookie);
 
-                log.debug("Starting continuous requests for {} ms with {} ms interval", duration.toMillis(), interval.toMillis());
+            log.debug("Starting continuous requests for {} ms with {} ms interval", duration.toMillis(), interval.toMillis());
 
+            try {
                 while (System.currentTimeMillis() < endTime) {
                     try {
                         final HttpClient.HttpResponse response = httpClient.getWithSession(url, "JSESSIONID=" + currentCookie);
@@ -100,14 +101,15 @@ public class ContinuousRequestRunner {
                         }
                     }
                 }
-
+            } finally {
                 executor.shutdown();
-                log.debug("Continuous requests completed: {} total, {} success, {} failed, {} session ID changes",
-                        result.getTotalCount(), result.getSuccessCount(), result.getFailedCount(), result.getSessionIdChanges());
+            }
 
-                return result;
-            });
-        }
+            log.debug("Continuous requests completed: {} total, {} success, {} failed, {} session ID changes",
+                    result.getTotalCount(), result.getSuccessCount(), result.getFailedCount(), result.getSessionIdChanges());
+
+            return result;
+        });
     }
 
     /**
