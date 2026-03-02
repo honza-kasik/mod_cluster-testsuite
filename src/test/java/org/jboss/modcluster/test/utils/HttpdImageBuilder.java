@@ -159,7 +159,7 @@ public class HttpdImageBuilder {
             try (FileWriter w = new FileWriter(dockerfile)) {
                 w.write(
                     "FROM " + baseImage + "\n" +
-                    "RUN dnf install -y pcre apr-util openssl unzip findutils && dnf clean all\n" +
+                    "RUN dnf install -y pcre apr-util openssl unzip findutils hostname && dnf clean all\n" +
                     "COPY " + zipFileName + " /opt/" + zipFileName + "\n" +
                     "RUN set -e && \\\n" +
                     "    unzip -q /opt/" + zipFileName + " -d /opt && rm /opt/" + zipFileName + " && \\\n" +
@@ -168,27 +168,27 @@ public class HttpdImageBuilder {
                     "    if [ -z \"$HTTPD_BIN\" ]; then echo 'ERROR: sbin/httpd not found in extracted ZIP' >&2; exit 1; fi && \\\n" +
                     "    HTTPD_ROOT=$(dirname \"$(dirname \"$HTTPD_BIN\")\") && \\\n" +
                     "    echo \"Detected httpd root: $HTTPD_ROOT\" && \\\n" +
-                    "    # Run .postinstall if present (creates conf/httpd.conf etc.)\n" +
-                    "    if [ -f \"$HTTPD_ROOT/.postinstall\" ]; then cd \"$HTTPD_ROOT\" && bash .postinstall; fi && \\\n" +
+                    "    # Run .postinstall (generates conf/httpd.conf from templates, creates dirs/symlinks)\n" +
+                    "    cd \"$HTTPD_ROOT\" && bash .postinstall && \\\n" +
+                    "    # Register bundled libs so httpd finds them at runtime\n" +
+                    "    echo \"$HTTPD_ROOT/lib\" > /etc/ld.so.conf.d/jbcs-httpd.conf && ldconfig && \\\n" +
+                    "    # Symlink compiled-in HTTPD_ROOT to actual extracted location\n" +
+                    "    COMPILED_ROOT=$(\"$HTTPD_ROOT/sbin/httpd\" -V 2>/dev/null | grep -oP 'HTTPD_ROOT=\"\\K[^\"]+') && \\\n" +
+                    "    echo \"Compiled-in HTTPD_ROOT: $COMPILED_ROOT\" && \\\n" +
+                    "    if [ -n \"$COMPILED_ROOT\" ] && [ \"$COMPILED_ROOT\" != \"$HTTPD_ROOT\" ]; then \\\n" +
+                    "        mkdir -p \"$(dirname \"$COMPILED_ROOT\")\" && \\\n" +
+                    "        ln -sfn \"$HTTPD_ROOT\" \"$COMPILED_ROOT\"; \\\n" +
+                    "    fi && \\\n" +
                     "    # Symlink to /usr/local/apache2 (expected by BalancerContainer)\n" +
                     "    ln -sfn \"$HTTPD_ROOT\" /usr/local/apache2 && \\\n" +
-                    "    # Ensure bin/httpd and bin/apachectl exist (JBCS keeps them in sbin/)\n" +
                     "    mkdir -p /usr/local/apache2/bin /usr/local/apache2/conf/extra && \\\n" +
-                    "    for cmd in httpd apachectl; do \\\n" +
-                    "        if [ ! -e /usr/local/apache2/bin/$cmd ] && [ -e /usr/local/apache2/sbin/$cmd ]; then \\\n" +
-                    "            ln -sf ../sbin/$cmd /usr/local/apache2/bin/$cmd; \\\n" +
-                    "        fi; \\\n" +
+                    "    for f in /usr/local/apache2/sbin/*; do \\\n" +
+                    "        ln -sf ../sbin/$(basename $f) /usr/local/apache2/bin/$(basename $f); \\\n" +
                     "    done && \\\n" +
-                    "    # Create minimal httpd.conf if .postinstall did not create one\n" +
-                    "    if [ ! -f /usr/local/apache2/conf/httpd.conf ]; then \\\n" +
-                    "        echo 'ServerRoot \"/usr/local/apache2\"' > /usr/local/apache2/conf/httpd.conf && \\\n" +
-                    "        echo 'Listen 80' >> /usr/local/apache2/conf/httpd.conf; \\\n" +
-                    "    fi && \\\n" +
-                    "    # Disable proxy_balancer in all config dirs (conflicts with mod_proxy_cluster)\n" +
-                    "    find /usr/local/apache2/conf /usr/local/apache2/conf.d /usr/local/apache2/conf.modules.d \\\n" +
-                    "        -name '*.conf' -exec sed -i 's/^\\(LoadModule proxy_balancer_module\\)/#\\1/' {} \\; 2>/dev/null; \\\n" +
-                    "    echo '--- httpd version ---' && /usr/local/apache2/bin/httpd -v && \\\n" +
-                    "    echo '--- modules dir ---' && ls /usr/local/apache2/modules/\n" +
+                    "    # Disable proxy_balancer (conflicts with mod_proxy_cluster)\n" +
+                    "    find /usr/local/apache2 -name '*.conf' -exec \\\n" +
+                    "        sed -i 's/^\\(LoadModule proxy_balancer_module\\)/#\\1/' {} \\; 2>/dev/null; \\\n" +
+                    "    echo '--- httpd version ---' && /usr/local/apache2/bin/httpd -v\n" +
                     "EXPOSE 8080 8443 6666\n"
                 );
             }
