@@ -115,7 +115,13 @@ public class HttpdImageBuilder {
     }
 
     /**
-     * Path B — use a pre-built httpd ZIP (e.g. JBCS) and compile only the modules against it.
+     * Path B — use a pre-built httpd ZIP (e.g. JBCS) that already contains httpd and all
+     * required modules (including mod_proxy_cluster). No compilation needed.
+     *
+     * <p>The ZIP is expected to contain a directory tree with {@code sbin/httpd} and
+     * {@code modules/}. The builder auto-detects the httpd root, symlinks it to
+     * {@code /usr/local/apache2} (the path expected by {@link BalancerContainer}),
+     * and ensures {@code bin/httpd} and {@code conf/httpd.conf} exist.
      */
     private static String buildFromZip(File zipFile) {
         if (!zipFile.exists()) {
@@ -123,7 +129,7 @@ public class HttpdImageBuilder {
         }
 
         String zipFileName = zipFile.getName();
-        String imageTag = "modcluster-test/" + zipFileName.replace(".zip", "").toLowerCase() + ":mod-proxy-cluster";
+        String imageTag = "modcluster-test/" + zipFileName.replace(".zip", "").toLowerCase() + ":latest";
 
         if (ImageBuilder.imageExists(imageTag)) {
             log.info("httpd image already exists: {}", imageTag);
@@ -144,22 +150,33 @@ public class HttpdImageBuilder {
             try (FileWriter w = new FileWriter(dockerfile)) {
                 w.write(
                     "FROM fedora:42\n" +
-                    "RUN dnf install -y gcc apr-devel apr-util-devel openssl-devel pcre-devel \\\n" +
-                    "    redhat-rpm-config autoconf git unzip findutils pcre apr-util make\n" +
+                    "RUN dnf install -y pcre apr-util openssl unzip findutils && dnf clean all\n" +
                     "COPY " + zipFileName + " /opt/" + zipFileName + "\n" +
-                    "RUN unzip -q /opt/" + zipFileName + " -d /opt && rm /opt/" + zipFileName + " && \\\n" +
-                    "    APXS=$(find / -name apxs -type f 2>/dev/null | head -1) && \\\n" +
-                    "    echo \"Found apxs: $APXS\"\n" +
-                    "RUN git clone --depth 1 " + MOD_PROXY_CLUSTER_REPO + " /mod_proxy_cluster\n" +
-                    "WORKDIR /mod_proxy_cluster/native\n" +
-                    "RUN APXS=$(find / -name apxs -type f 2>/dev/null | head -1) && \\\n" +
-                    "    for m in advertise mod_proxy_cluster balancers mod_manager; do \\\n" +
-                    "      cd $m; ./buildconf; \\\n" +
-                    "      ./configure --with-apxs=$APXS; \\\n" +
-                    "      make clean; make || exit 1; \\\n" +
-                    "      MODDIR=$($APXS -q LIBEXECDIR 2>/dev/null || echo /usr/local/apache2/modules); \\\n" +
-                    "      cp *.so $MODDIR; cd ..; \\\n" +
-                    "    done\n" +
+                    "RUN set -e && \\\n" +
+                    "    unzip -q /opt/" + zipFileName + " -d /opt && rm /opt/" + zipFileName + " && \\\n" +
+                    "    # Auto-detect httpd root (directory containing sbin/httpd)\n" +
+                    "    HTTPD_BIN=$(find /opt -name httpd -path '*/sbin/httpd' -type f 2>/dev/null | head -1) && \\\n" +
+                    "    if [ -z \"$HTTPD_BIN\" ]; then echo 'ERROR: sbin/httpd not found in extracted ZIP' >&2; exit 1; fi && \\\n" +
+                    "    HTTPD_ROOT=$(dirname \"$(dirname \"$HTTPD_BIN\")\") && \\\n" +
+                    "    echo \"Detected httpd root: $HTTPD_ROOT\" && \\\n" +
+                    "    # Run .postinstall if present (creates conf/httpd.conf etc.)\n" +
+                    "    if [ -f \"$HTTPD_ROOT/.postinstall\" ]; then cd \"$HTTPD_ROOT\" && bash .postinstall; fi && \\\n" +
+                    "    # Symlink to /usr/local/apache2 (expected by BalancerContainer)\n" +
+                    "    ln -sfn \"$HTTPD_ROOT\" /usr/local/apache2 && \\\n" +
+                    "    # Ensure bin/httpd and bin/apachectl exist (JBCS keeps them in sbin/)\n" +
+                    "    mkdir -p /usr/local/apache2/bin /usr/local/apache2/conf/extra && \\\n" +
+                    "    for cmd in httpd apachectl; do \\\n" +
+                    "        if [ ! -e /usr/local/apache2/bin/$cmd ] && [ -e /usr/local/apache2/sbin/$cmd ]; then \\\n" +
+                    "            ln -sf ../sbin/$cmd /usr/local/apache2/bin/$cmd; \\\n" +
+                    "        fi; \\\n" +
+                    "    done && \\\n" +
+                    "    # Create minimal httpd.conf if .postinstall did not create one\n" +
+                    "    if [ ! -f /usr/local/apache2/conf/httpd.conf ]; then \\\n" +
+                    "        echo 'ServerRoot \"/usr/local/apache2\"' > /usr/local/apache2/conf/httpd.conf && \\\n" +
+                    "        echo 'Listen 80' >> /usr/local/apache2/conf/httpd.conf; \\\n" +
+                    "    fi && \\\n" +
+                    "    echo '--- httpd version ---' && /usr/local/apache2/bin/httpd -v && \\\n" +
+                    "    echo '--- modules dir ---' && ls /usr/local/apache2/modules/\n" +
                     "EXPOSE 8080 8443 6666\n"
                 );
             }
