@@ -228,7 +228,7 @@ mvn test -Dtest=org.jboss.modcluster.test.ssl.*
 mvn test -Dtest=StickySessionTest,SSLTest,LoadBalancingGroupFailoverTest
 ```
 
-## Matrix Testing (Like Jenkins)
+## Matrix Testing
 
 ### Both Balancers Sequentially
 
@@ -275,7 +275,7 @@ testcontainers.reuse.enable=true
 mvn test
 ```
 
-⚠️ **Note**: Disable for CI (already disabled in Jenkins profile)
+⚠️ **Note**: Disable for CI (already disabled in CI profile)
 
 ### Custom Container Startup Timeout
 
@@ -407,19 +407,9 @@ sudo ln -s /run/user/$(id -u)/podman/podman.sock /var/run/docker.sock
 
 ### CI/CD Optimization
 
-1. **Cache Maven dependencies**:
-   ```groovy
-   // In Jenkinsfile
-   options {
-       buildDiscarder(logRotator(numToKeepStr: '10'))
-       timestamps()
-       timeout(time: 2, unit: 'HOURS')
-   }
-   ```
-
-2. **Parallel matrix builds** (already configured in Jenkinsfile)
-
-3. **Prune containers after tests** (already in Jenkinsfile post-build)
+1. **Cache Maven dependencies** (configured in GitHub Actions workflow)
+2. **Parallel matrix builds** (configured via strategy matrix)
+3. **Prune containers after tests**
 
 ## Getting Help
 
@@ -458,3 +448,61 @@ docker logs <container-id>
 7. ✅ **Check container logs** when debugging failures
 8. ❌ **Don't commit ZIPs** to git (large files)
 9. ❌ **Don't use container reuse** in CI (causes flakiness)
+
+## Performance
+
+### Expected Timings
+
+#### By Test Complexity
+
+| Test Type | Setup Time | Execution | Total |
+|-----------|-----------|-----------|-------|
+| Simple CLI test | 1-2 min | 5-10 sec | ~2 min |
+| Session test (2 workers) | 2-3 min | 10-20 sec | ~3 min |
+| Load test (100 requests) | 2-3 min | 30-60 sec | ~4 min |
+| SSL test | 2-3 min | 10-20 sec | ~3 min |
+
+#### By Balancer Type
+
+| Balancer | First Run | Cached Run |
+|----------|-----------|------------|
+| **Undertow** (from ZIP) | 3-5 min | 1-2 min |
+| **Undertow** (pre-built) | 1-2 min | 45-90 sec |
+| **httpd** (always pre-built) | 30-60 sec | 30-60 sec |
+
+#### Full Suite
+
+| Scenario | Time |
+|----------|------|
+| First run, no cache | ~20-30 min |
+| Subsequent runs, cached | ~10-15 min |
+| With container reuse | ~5-10 min |
+| Parallel (2 forks) | ~10-15 min |
+
+### Container Reuse (Development)
+
+For the fastest local iteration, enable Testcontainers reuse:
+
+```properties
+# In src/test/resources/testcontainers.properties
+testcontainers.reuse.enable=true
+```
+
+With reuse enabled, containers stay running between test runs. The first run starts containers normally, but subsequent runs reuse them — reducing startup from minutes to seconds.
+
+**Important**: Stop containers manually when done: `docker stop $(docker ps -aq)`
+
+### Selective Execution
+
+Don't run the full suite during development:
+
+```bash
+# Single test class
+mvn test -Dtest=StickySessionTest
+
+# Single test method
+mvn test -Dtest=StickySessionTest#testStickySessionsMaintainedAcrossRequests
+
+# Package
+mvn test -Dtest=org.jboss.modcluster.test.failover.*
+```

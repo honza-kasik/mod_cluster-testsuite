@@ -33,6 +33,9 @@ Thumbs.db
 # Testcontainers
 .testcontainers.properties
 
+# Claude Code
+.claude/
+
 # Distributions (ZIP files are large and user-specific)
 distributions/*.zip
 distributions/*.tar.gz

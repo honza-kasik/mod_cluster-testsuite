@@ -43,6 +43,83 @@ This document contains guidelines for working with this codebase.
 * JUnit's `@ExtendWith(SoftAssertionsExtension.class)` auto-calls `assertAll()`
 * Good for comprehensive failure reporting on final state
 
+== Writing Tests
+
+These tests verify **mod_cluster protocol and infrastructure** behavior, not application-specific functionality.
+
+=== Focus on mod_cluster, not applications
+
+Tests should verify how mod_cluster routes, balances, and fails over — not whether a deployed application produces correct output. The demo application (`demo.war`) is a tool to observe mod_cluster behavior, not the subject under test.
+
+**Good test** — tests mod_cluster routing:
+[source,java]
+----
+@Test
+public void testWorkerRegistersWithBalancer(TestCluster cluster) throws Exception {
+    cluster.startWorkers(1);
+    WildFlyContainer worker = cluster.getWorker1();
+
+    // Verify worker registered via MCMP
+    ModelNode proxyInfo = getProxyInfo(worker);
+    softly.assertThat(proxyInfo.hasDefined("Node"))
+        .as("Worker should register as a node with balancer")
+        .isTrue();
+}
+----
+
+**Bad test** — tests application output:
+[source,java]
+----
+@Test
+public void testApplicationReturnsCorrectData(TestCluster cluster, HttpClient client) {
+    // This tests the application, not mod_cluster!
+    HttpResponse response = client.get(url + "/myapp/data");
+    softly.assertThat(response.getBody()).contains("expected data");
+}
+----
+
+=== Test template
+
+[source,java]
+----
+@ExtendWith({ModClusterTestExtension.class, SoftAssertionsExtension.class})
+public class MyModClusterTest {
+
+    @InjectSoftAssertions
+    private SoftAssertions softly;
+
+    @Test
+    public void testModClusterBehavior(TestCluster cluster, HttpClient client) throws Exception {
+        // Start infrastructure
+        cluster.startWorkers(2);
+
+        // Test mod_cluster behavior (not app behavior!)
+        // Example: Verify load distribution
+        // Example: Test failover mechanism
+        // Example: Validate configuration changes
+
+        // Assertions about mod_cluster behavior
+        softly.assertThat(...)
+            .as("Describe what mod_cluster should do")
+            .isTrue();
+    }
+}
+----
+
+=== Test packages
+
+Choose the appropriate package for your test:
+
+* `/cli/` — Management and configuration via CLI/Creaper
+* `/failover/` — Failover scenarios, session migration, worker failure
+* `/loadbalancing/` — Load distribution, metrics, algorithms
+* `/ssl/` — SSL/TLS between balancer and workers
+* `/configuration/` — Dynamic reconfiguration, settings validation
+* `/context/` — Context enable/disable, exclusion patterns, deployment registration
+* `/session/` — Session affinity, timeout handling, cookie configuration
+* `/ha/` — High availability, soak testing, multi-balancer scenarios
+* `/integration/` — End-to-end and protocol-level tests
+
 == Feature Parity
 
 Goal of this project is to achieve feature parity in modcluster tests which are implemented in `../noe-tests/modcluster`.

@@ -1,5 +1,7 @@
 # ModCluster Test Suite
 
+[![ModCluster Tests](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
+
 Comprehensive test suite for mod_cluster with WildFly/EAP workers and Undertow/httpd balancers.
 
 ## Architecture
@@ -15,35 +17,44 @@ This test suite uses:
 
 ```
 src/test/java/org/jboss/modcluster/test/
+├── apps/                      # Test application endpoints (e.g. WebSocket)
 ├── base/                      # Core test infrastructure
 │   ├── BalancerType.java     # Balancer type enum
 │   └── ModClusterTestExtension.java  # JUnit 5 extension for DI
-├── cli/                       # CLI-based tests
-│   └── AS7CLITest.java
-├── failover/                  # Failover scenarios
-│   └── StickySessionTest.java
-├── loadbalancing/             # Load balancing tests
-│   └── LoadBalancingGroupFailoverTest.java
-├── ssl/                       # SSL/TLS tests
-│   └── SSLTest.java
+├── cli/                       # CLI & management tests
+│   ├── CliManagementTest.java
+│   └── MultipleUndertowServerSupportTest.java
 ├── configuration/             # Configuration tests
-│   └── DynamicReconfTest.java
+│   ├── DynamicReconfTest.java
+│   ├── InitialLoadTest.java
+│   ├── SettingsTest.java
+│   └── WorkerWithOneNotRespondingProxyTest.java
+├── context/                   # Context lifecycle tests
+│   └── ContextLifecycleTest.java
+├── failover/                  # Failover scenarios
+│   ├── AdvancedFailoverTest.java
+│   ├── FailoverSettingsTest.java
+│   ├── StickySessionTest.java
+│   └── WebSocketsTest.java
+├── ha/                        # High availability & soak tests
+│   ├── HighAvailabilityTest.java
+│   └── SoakTest.java
+├── integration/               # End-to-end integration tests
+├── loadbalancing/             # Load balancing tests
+│   ├── LoadBalancingGroupFailoverTest.java
+│   └── LoadMetricsTest.java
+├── session/                   # Session management tests
+│   └── SessionManagementTest.java
+├── ssl/                       # SSL/TLS tests
+│   ├── SslCrlTest.java
+│   ├── SslFailoverTest.java
+│   └── SslWorkerAuthenticationTest.java
 └── utils/                     # Utilities
     ├── BalancerContainer.java
     ├── WildFlyContainer.java
-    └── HttpClient.java
+    ├── HttpClient.java
+    └── ...
 ```
-
-## ⚠️ Important: Example Tests
-
-The included tests are **EXAMPLES/TEMPLATES** to demonstrate testing patterns:
-
-- ✅ Show test structure and dependency injection
-- ✅ Include a demo WAR application for testing
-- ✅ Demonstrate mod_cluster test scenarios
-- ❌ Are NOT production tests for your specific application
-
-**Next steps**: Use these as templates to create tests for your own application. See [Test README](src/test/java/org/jboss/modcluster/test/README.md) for details on customizing tests.
 
 ## Running Tests
 
@@ -63,16 +74,21 @@ The included tests are **EXAMPLES/TEMPLATES** to demonstrate testing patterns:
    cp ~/Downloads/jboss-eap-8.0.0.zip distributions/
    ```
 
+   Alternatively, download WildFly from Maven Central:
+   ```bash
+   mvn generate-test-resources -Pdownload-wildfly -Dwildfly.version=34.0.1.Final -DskipTests
+   ```
+
 2. **Run setup (builds container images)**:
    ```bash
    ./setup.sh
    ```
 
    This will:
-   - ✓ Check prerequisites (Java, Maven, Docker)
-   - ✓ Detect ZIPs in `distributions/`
-   - ✓ Build Docker images (once, cached for future runs)
-   - ✓ Show build summary
+   - Check prerequisites (Java, Maven, Docker)
+   - Detect ZIPs in `distributions/`
+   - Build Docker images (once, cached for future runs)
+   - Show build summary
 
 3. **Run tests**:
    ```bash
@@ -207,71 +223,72 @@ WildFlyContainer worker = cluster.getWorker1();
 String result = worker.executeCli("/subsystem=modcluster:read-resource");
 ```
 
-## Jenkins Matrix
-
-The test suite supports matrix builds in Jenkins for testing against both balancer types:
-
-```groovy
-matrix {
-    axes {
-        axis {
-            name 'BALANCER_TYPE'
-            values 'undertow', 'httpd'
-        }
-    }
-}
-```
-
-See `Jenkinsfile` for complete pipeline configuration.
-
 ## Test Categories
 
-Based on the existing test matrix:
-
-### CLI Tests
-- AS7CLITest - CLI command testing
-- AS7LegacyOperationsSmokeTest - Legacy operations compatibility
-- AS7RestartOrNotTest - Restart scenarios
+### CLI & Management Tests
+- **CliManagementTest** - CLI operations, configuration read/write, deployment status
+- **MultipleUndertowServerSupportTest** - Multiple Undertow server instances
 
 ### Failover Tests
-- DeterministicFailoverTest - Predictable failover behavior
-- FailoverTest - General failover scenarios
-- FailoverUnregisterTest - Unregistration during failover
-- SmoothFailoverTest - Graceful failover
-- StickySessionTest - Session affinity
+- **AdvancedFailoverTest** - Failover with active sessions, deterministic and graceful failover
+- **FailoverSettingsTest** - Failover configuration options
+- **StickySessionTest** - Session affinity across requests
+- **WebSocketsTest** - WebSocket proxying and failover
 
 ### SSL Tests
-- SSLTest - Basic SSL connectivity
-- SslCrlTest - Certificate revocation lists
-- SslFailoverElytronTest - SSL with Elytron
-- SslWorkerAuthenticationTest - Worker authentication
+- **SslCrlTest** - Certificate Revocation List validation
+- **SslFailoverTest** - SSL with failover scenarios
+- **SslWorkerAuthenticationTest** - Mutual SSL authentication
 
 ### Load Balancing Tests
-- LoadBalancingGroupFailoverTest - Group failover
-- LoadCalculationTest - Load metrics calculation
-- InitialLoadTest - Initial load distribution
+- **LoadBalancingGroupFailoverTest** - Load distribution and group failover
+- **LoadMetricsTest** - Load metrics calculation and custom metrics
 
 ### Configuration Tests
-- DynamicReconfTest - Dynamic reconfiguration
-- SettingsTest - Configuration settings
-- TwoBalancerSettingsTest - Multiple balancers
-
-### Session Tests
-- SessionTimeoutTest - Session timeout handling
-- CookieNameTest - Custom cookie names
+- **DynamicReconfTest** - Dynamic worker registration and reconfiguration
+- **InitialLoadTest** - Initial load reporting
+- **SettingsTest** - Configuration settings validation
+- **WorkerWithOneNotRespondingProxyTest** - Proxy resilience
 
 ### Context Tests
-- AutoEnableContextsTest - Automatic context enablement
-- ContextDelimiterTest - Context path delimiters
-- ExcludedContextsTest - Context exclusion
-- LocationContextTest - Location-based contexts
-- ManyContextsTest - High context count
+- **ContextLifecycleTest** - Context enable/disable, exclusion patterns, deployment registration
 
-### Integration Tests
-- EjbViaHttpTest - EJB over HTTP
-- WebSocketsTest - WebSocket support
-- ModProxyTest - mod_proxy integration
-- ModRewriteTest - mod_rewrite integration
+### Session Tests
+- **SessionManagementTest** - Session timeout, custom cookies, JVM routes
+
+### High Availability Tests
+- **HighAvailabilityTest** - Hot standby, multiple balancers
+- **SoakTest** - Long-running stability testing
+
+## Test Coverage
+
+### Current Status vs noe-tests
+
+This test suite aims for feature parity with `noe-tests/modcluster` (64 test files). The following table shows coverage status:
+
+| Area | Implemented | Key Test Classes |
+|------|-------------|-----------------|
+| CLI & Management | Yes | CliManagementTest, MultipleUndertowServerSupportTest |
+| Sticky Sessions | Yes | StickySessionTest |
+| Advanced Failover | Yes | AdvancedFailoverTest, FailoverSettingsTest |
+| Load Balancing | Yes | LoadBalancingGroupFailoverTest, LoadMetricsTest |
+| SSL/TLS | Yes | SslCrlTest, SslFailoverTest, SslWorkerAuthenticationTest |
+| Dynamic Reconfiguration | Yes | DynamicReconfTest, SettingsTest |
+| Context Lifecycle | Yes | ContextLifecycleTest |
+| Session Management | Yes | SessionManagementTest |
+| High Availability | Yes | HighAvailabilityTest |
+| WebSockets | Yes | WebSocketsTest |
+| Initial Load | Yes | InitialLoadTest |
+| Soak/Stress Testing | Yes | SoakTest |
+
+### Not Yet Implemented
+
+| Area | noe-tests Reference |
+|------|-------------------|
+| AJP Protocol | ModClusterAJP.groovy |
+| EJB over HTTP | EjbViaHttpTest.groovy |
+| mod_proxy / mod_rewrite | ModProxyTest.groovy, ModRewriteTest.groovy |
+| Bug-specific regressions | JBCS*, JBQA* test files |
 
 ## How It Works
 
@@ -342,6 +359,8 @@ When adding new tests:
 4. Inject `TestCluster` and `HttpClient` as needed
 5. Document test purpose in class javadoc
 6. Follow existing naming conventions
+
+See [CONTRIBUTING.adoc](CONTRIBUTING.adoc) for detailed guidelines.
 
 ## License
 
