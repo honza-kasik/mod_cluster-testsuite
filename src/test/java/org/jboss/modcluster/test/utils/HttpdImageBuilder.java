@@ -10,6 +10,8 @@ import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Builds a Docker image containing httpd with mod_proxy_cluster modules compiled from source.
@@ -136,7 +138,14 @@ public class HttpdImageBuilder {
             return imageTag;
         }
 
-        log.info("Building httpd image from ZIP: {} (tag: {})", zipFileName, imageTag);
+        // Detect RHEL version from ZIP filename (e.g. "RHEL8", "RHEL9") to pick matching base image
+        String baseImage = "fedora:42";
+        Matcher rhelMatcher = Pattern.compile("RHEL(\\d+)").matcher(zipFileName);
+        if (rhelMatcher.find()) {
+            baseImage = "registry.access.redhat.com/ubi" + rhelMatcher.group(1) + "/ubi:latest";
+        }
+
+        log.info("Building httpd image from ZIP: {} (base: {}, tag: {})", zipFileName, baseImage, imageTag);
 
         try {
             Path buildDir = Files.createTempDirectory("httpd-zip-build-");
@@ -149,7 +158,7 @@ public class HttpdImageBuilder {
             File dockerfile = new File(buildDirFile, "Dockerfile");
             try (FileWriter w = new FileWriter(dockerfile)) {
                 w.write(
-                    "FROM fedora:42\n" +
+                    "FROM " + baseImage + "\n" +
                     "RUN dnf install -y pcre apr-util openssl unzip findutils && dnf clean all\n" +
                     "COPY " + zipFileName + " /opt/" + zipFileName + "\n" +
                     "RUN set -e && \\\n" +
@@ -175,6 +184,9 @@ public class HttpdImageBuilder {
                     "        echo 'ServerRoot \"/usr/local/apache2\"' > /usr/local/apache2/conf/httpd.conf && \\\n" +
                     "        echo 'Listen 80' >> /usr/local/apache2/conf/httpd.conf; \\\n" +
                     "    fi && \\\n" +
+                    "    # Disable proxy_balancer in all config dirs (conflicts with mod_proxy_cluster)\n" +
+                    "    find /usr/local/apache2/conf /usr/local/apache2/conf.d /usr/local/apache2/conf.modules.d \\\n" +
+                    "        -name '*.conf' -exec sed -i 's/^\\(LoadModule proxy_balancer_module\\)/#\\1/' {} \\; 2>/dev/null; \\\n" +
                     "    echo '--- httpd version ---' && /usr/local/apache2/bin/httpd -v && \\\n" +
                     "    echo '--- modules dir ---' && ls /usr/local/apache2/modules/\n" +
                     "EXPOSE 8080 8443 6666\n"
