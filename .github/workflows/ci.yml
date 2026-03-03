@@ -36,6 +36,7 @@ jobs:
         run: >
           mvn -B test
           -Dtest=SoakTest
+          -DexcludedGroups=none
           -DSOAK_TEST_TIME=0
           -Dbalancer.type=${{ matrix.balancer-type }}
           -Dwildfly.version=${{ matrix.wildfly-version }}
