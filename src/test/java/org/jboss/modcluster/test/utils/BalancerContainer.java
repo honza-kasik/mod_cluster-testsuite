@@ -477,8 +477,19 @@ public abstract class BalancerContainer {
                 // Step 4: Reload from admin-only mode to normal mode (like noe-tests stop/start)
                 log.info("Reloading server to transition from admin-only to normal mode");
                 new Administration(client).reload();
-
                 client.close();
+
+                // Poll management interface until server is running after leaving admin-only mode
+                OnlineManagementClient readyClient = ManagementClient.online(
+                    OnlineOptions.standalone()
+                        .hostAndPort(container.getHost(), container.getMappedPort(MANAGEMENT_PORT))
+                        .auth("admin", "admin")
+                        .connectionTimeout(60_000)
+                        .bootTimeout(60_000)
+                        .build()
+                );
+                new Administration(readyClient).waitUntilRunning();
+                readyClient.close();
 
                 log.info("Undertow balancer configured successfully. MCMP on HTTP socket binding (port {})", HTTP_PORT);
 

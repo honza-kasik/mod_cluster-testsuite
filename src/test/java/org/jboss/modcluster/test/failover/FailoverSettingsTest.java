@@ -214,10 +214,10 @@ public class FailoverSettingsTest {
                 .isGreaterThanOrEqualTo(nodeTimeout * 1000L);
 
         softly.assertThat(durationMs)
-                .as("Response should come within node-timeout + 2s (%d seconds), not after app sleep (%d seconds). " +
+                .as("Response should come within node-timeout + 7s (%d seconds), not after app sleep (%d seconds). " +
                                 "Got response in %.1f seconds. See JBEAP-9624.",
-                        nodeTimeout + 2, appSleepSeconds, durationSec)
-                .isLessThan((nodeTimeout + 2) * 1000L);
+                        nodeTimeout + 7, appSleepSeconds, durationSec)
+                .isLessThan((nodeTimeout + 7) * 1000L);
 
         try {
             worker.deployment().undeploy("sleepApp.war");

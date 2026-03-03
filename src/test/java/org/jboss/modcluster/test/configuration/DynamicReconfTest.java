@@ -41,12 +41,8 @@ public class DynamicReconfTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
-        // Verify only worker1 receives traffic
-        Map<String, Integer> initialDistribution = httpClient.testLoadDistribution(balancerUrl, 10);
-
-        softly.assertThat(initialDistribution)
-                .as("Initially only worker1 should receive traffic")
-                .containsOnlyKeys("worker1");
+        // Wait for worker1 to register and receive traffic
+        Map<String, Integer> initialDistribution = httpClient.waitForWorkerRegistration(balancerUrl, 1, ofSeconds(30));
 
         log.info("Initial distribution: {}", initialDistribution);
 
@@ -120,11 +116,8 @@ public class DynamicReconfTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
-        // Verify both workers active
-        Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 20);
-        softly.assertThat(initialDist)
-                .as("Both workers should be active initially")
-                .containsKeys("worker1", "worker2");
+        // Wait for both workers to register and receive traffic
+        Map<String, Integer> initialDist = httpClient.waitForWorkerRegistration(balancerUrl, 2, ofSeconds(30));
 
         // Stop worker1
         log.info("Stopping worker1...");

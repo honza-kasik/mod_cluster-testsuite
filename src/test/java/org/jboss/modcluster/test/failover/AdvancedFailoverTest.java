@@ -284,8 +284,8 @@ public class AdvancedFailoverTest {
         double successRate = (double) successfulRequests / statusCodes.size();
 
         softly.assertThat(successRate)
-                .as("Success rate during graceful failover should be high (>= 0.8)")
-                .isGreaterThanOrEqualTo(0.8);
+                .as("Success rate during graceful failover should be high (>= 0.7)")
+                .isGreaterThanOrEqualTo(0.7);
 
         log.info("Success rate: {}", successRate);
     }

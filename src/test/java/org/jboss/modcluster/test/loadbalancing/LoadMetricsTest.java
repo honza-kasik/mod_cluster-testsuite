@@ -329,6 +329,9 @@ public class LoadMetricsTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
+        // Wait for both workers to register and receive traffic
+        httpClient.waitForWorkerRegistration(balancerUrl, 2, java.time.Duration.ofSeconds(30));
+
         // Generate traffic to observe load-based distribution
         Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 100);
         log.info("Load distribution with dynamic load metrics: {}", distribution);
@@ -371,11 +374,8 @@ public class LoadMetricsTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
-        // Verify worker is accessible via balancer (indicates successful registration with load)
-        HttpClient.HttpResponse response = httpClient.get(balancerUrl);
-        softly.assertThat(response.getStatusCode())
-                .as("Worker should be accessible after registration with initial load")
-                .isEqualTo(200);
+        // Wait for worker to register and become accessible via balancer
+        httpClient.waitForWorkerRegistration(balancerUrl, 1, java.time.Duration.ofSeconds(30));
 
         // Read worker's status-interval to verify load reporting is configured
         WildFlyContainer worker = cluster.getWorker1();
@@ -561,6 +561,9 @@ public class LoadMetricsTest {
         cluster.startWorkers(2, JAVA_OPTS);
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
+
+        // Wait for both workers to register and receive traffic
+        httpClient.waitForWorkerRegistration(balancerUrl, 2, java.time.Duration.ofSeconds(30));
 
         // Generate multiple rounds of traffic to observe dynamic load adjustment
         Map<String, Integer> round1 = httpClient.testLoadDistribution(balancerUrl, 50);

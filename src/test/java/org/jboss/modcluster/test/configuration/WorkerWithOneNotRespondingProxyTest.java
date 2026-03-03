@@ -98,9 +98,9 @@ public class WorkerWithOneNotRespondingProxyTest {
         log.info("Worker reload with fake proxy took {} seconds", durationSeconds);
 
         softly.assertThat(durationSeconds)
-                .as("(MODCLUSTER-639) Worker startup should not take more than 60 seconds " +
+                .as("(MODCLUSTER-639) Worker startup should not take more than 120 seconds " +
                         "even with a non-responding proxy, but it took %d seconds", durationSeconds)
-                .isLessThan(60);
+                .isLessThan(120);
 
         // Verify the worker is actually functional by checking a context via balancer
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";

@@ -77,11 +77,8 @@ public class LoadBalancingGroupFailoverTest {
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
-        // Verify both workers are receiving traffic
-        Map<String, Integer> initialDistribution = httpClient.testLoadDistribution(balancerUrl, 20);
-        softly.assertThat(initialDistribution)
-                .as("Initially both workers should receive requests")
-                .containsKeys("worker1", "worker2");
+        // Wait for both workers to register and receive traffic
+        Map<String, Integer> initialDistribution = httpClient.waitForWorkerRegistration(balancerUrl, 2, ofSeconds(30));
 
         log.info("Initial distribution: {}", initialDistribution);
 

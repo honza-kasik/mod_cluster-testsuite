@@ -57,6 +57,13 @@ public class SessionManagementTest {
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
 
+        // Wait for deployment to register on balancer
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+            .untilAsserted(() -> {
+                HttpResponse resp = httpClient.get(url);
+                assertThat(resp.getStatusCode()).isEqualTo(200);
+            });
+
         // Establish session
         final HttpResponse initial = httpClient.get(url);
         final String sessionCookie = initial.getCookie("JSESSIONID");
@@ -110,6 +117,13 @@ public class SessionManagementTest {
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
 
+        // Wait for deployment to register on balancer
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+            .untilAsserted(() -> {
+                HttpResponse resp = httpClient.get(url);
+                assertThat(resp.getStatusCode()).isEqualTo(200);
+            });
+
         // Establish session
         final HttpResponse initial = httpClient.get(url);
         final String sessionCookie = initial.getCookie("JSESSIONID");
@@ -161,6 +175,13 @@ public class SessionManagementTest {
         cluster.getWorker2().deployment().deploy(timeoutApp, "timeout-test.war");
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
+
+        // Wait for deployment to register on balancer
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+            .untilAsserted(() -> {
+                HttpResponse resp = httpClient.get(url);
+                assertThat(resp.getStatusCode()).isEqualTo(200);
+            });
 
         // Establish session
         final HttpResponse initial = httpClient.get(url);
@@ -220,6 +241,13 @@ public class SessionManagementTest {
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
 
+        // Wait for deployment to register on balancer
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+            .untilAsserted(() -> {
+                HttpResponse resp = httpClient.get(url);
+                assertThat(resp.getStatusCode()).isEqualTo(200);
+            });
+
         // Establish session
         final HttpResponse initial = httpClient.get(url);
         final String sessionCookie = initial.getCookie("JSESSIONID");
@@ -271,6 +299,13 @@ public class SessionManagementTest {
         cluster.getWorker2().deployment().deploy(timeoutApp, "timeout-test.war");
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
+
+        // Wait for deployment to register on balancer
+        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+            .untilAsserted(() -> {
+                HttpResponse resp = httpClient.get(url);
+                assertThat(resp.getStatusCode()).isEqualTo(200);
+            });
 
         // Establish session
         final HttpResponse initial = httpClient.get(url);

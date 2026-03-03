@@ -15,9 +15,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.security.KeyStore;
 import java.security.cert.X509Certificate;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static java.time.Duration.ofSeconds;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * HTTP client utility for making requests through the balancer.
@@ -316,6 +322,26 @@ public class HttpClient {
                     extractHeaders(response)
             );
         }
+    }
+
+    /**
+     * Wait until the expected number of workers are receiving traffic via the balancer.
+     * Polls with testLoadDistribution until the result map has exactly expectedWorkerCount keys.
+     *
+     * @param url the balancer URL to send requests to
+     * @param expectedWorkerCount number of distinct workers expected to receive traffic
+     * @param timeout maximum time to wait
+     * @return the last observed distribution map
+     */
+    public Map<String, Integer> waitForWorkerRegistration(String url, int expectedWorkerCount, Duration timeout) {
+        AtomicReference<Map<String, Integer>> lastDistribution = new AtomicReference<>();
+        await().atMost(timeout).pollInterval(ofSeconds(2))
+            .untilAsserted(() -> {
+                Map<String, Integer> dist = testLoadDistribution(url, expectedWorkerCount * 5);
+                lastDistribution.set(dist);
+                assertThat(dist).hasSize(expectedWorkerCount);
+            });
+        return lastDistribution.get();
     }
 
     /**

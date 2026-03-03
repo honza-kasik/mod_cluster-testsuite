@@ -100,8 +100,9 @@ public class ContextLifecycleTest {
         worker.reloadServer();
         worker.modCluster().configureStaticProxy();
 
-        // Verify demo is NOT accessible via balancer after exclusion
-        await().atMost(ofSeconds(30))
+        // Verify demo is NOT accessible via balancer after exclusion.
+        // Increased timeout to account for broken-node-timeout (10s) + CI slowness.
+        await().atMost(ofSeconds(45))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
@@ -332,13 +333,15 @@ public class ContextLifecycleTest {
 
             final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + normalizedContext + "/";
 
-            // Single check (not polling) — if the context is excluded, it should not be routed
-            final HttpResponse response = httpClient.get(balancerUrl);
-            softly.assertThat(response.getStatusCode())
-                    .as("Excluded context '%s' should NOT return 200 via balancer (got %d)",
-                            contextName, response.getStatusCode())
-                    .isNotEqualTo(200);
-            log.info("Excluded context '{}' returned status {} via balancer", contextName, response.getStatusCode());
+            // Poll until the excluded context is no longer routed (broken-node-timeout + CI delay)
+            await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+                    .untilAsserted(() -> {
+                        HttpResponse resp = httpClient.get(balancerUrl);
+                        assertThat(resp.getStatusCode())
+                                .as("Excluded context '%s' should NOT return 200 via balancer", contextName)
+                                .isNotEqualTo(200);
+                    });
+            log.info("Excluded context '{}' verified as not routed via balancer", contextName);
 
             // Verify excluded contexts that actually exist ARE still accessible directly on worker
             if (contextExists) {
@@ -783,7 +786,7 @@ public class ContextLifecycleTest {
         worker.modCluster().disableContext(DEMO_APP, "default-host");
 
         // Wait for disabled state to propagate to balancer
-        await().atMost(ofSeconds(15))
+        await().atMost(ofSeconds(30))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
@@ -806,7 +809,7 @@ public class ContextLifecycleTest {
         worker.modCluster().enableContext(DEMO_APP, "default-host");
 
         // Verify context is accessible again via balancer
-        await().atMost(ofSeconds(15))
+        await().atMost(ofSeconds(30))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
@@ -851,7 +854,7 @@ public class ContextLifecycleTest {
         worker.modCluster().stopContext(DEMO_APP, "default-host");
 
         // Verify context becomes unavailable via balancer
-        await().atMost(ofSeconds(timeoutSeconds + 10))
+        await().atMost(ofSeconds(timeoutSeconds + 20))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse stopResponse = httpClient.get(balancerUrl);
