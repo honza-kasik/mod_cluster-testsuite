@@ -5,6 +5,7 @@ import org.jboss.modcluster.test.base.ModClusterTestExtension.TestCluster;
 import org.jboss.modcluster.test.utils.HttpClient;
 import org.jboss.modcluster.test.utils.HttpClient.HttpResponse;
 import org.jboss.modcluster.test.utils.WildFlyContainer;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
@@ -24,6 +25,7 @@ import static java.time.Duration.ofSeconds;
  * Long-running soak test that repeatedly kills and restarts workers to verify cluster stability.
  * Duration is configurable via the system property {@code SOAK_TEST_TIME} (in hours, default 1).
  */
+@Tag("soak")
 @ExtendWith(ModClusterTestExtension.class)
 public class SoakTest {
 

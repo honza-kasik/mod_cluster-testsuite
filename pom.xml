@@ -214,6 +214,7 @@
                         <!-- Optional: Override Java version (11 or 17), auto-detected by default -->
                         <container.java.version>${container.java.version}</container.java.version>
                     </systemPropertyVariables>
+                    <excludedGroups>soak</excludedGroups>
                     <includes>
                         <include>**/*Test.java</include>
                         <include>**/*TestCase.java</include>
@@ -271,7 +272,7 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-surefire-plugin</artifactId>
                         <configuration>
-                            <excludedGroups>undertow</excludedGroups>
+                            <excludedGroups>undertow,soak</excludedGroups>
                         </configuration>
                     </plugin>
                 </plugins>
