@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -55,7 +56,7 @@ public class ContextLifecycleTest {
                 .isTrue();
 
         // Verify demo.war is deployed and accessible (auto-enabled)
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
@@ -76,7 +77,7 @@ public class ContextLifecycleTest {
         cluster.startWorkers(1);
         WildFlyContainer worker = cluster.getWorker1();
 
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Verify demo is initially accessible via balancer
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -89,7 +90,7 @@ public class ContextLifecycleTest {
 
         // Set excluded-contexts to include "demo", preserving ROOT default to prevent
         // the "/" context from acting as a catch-all on the balancer (see doExcludedContextsTest).
-        worker.modCluster().writeModClusterAttribute("excluded-contexts", "ROOT, demo");
+        worker.modCluster().writeModClusterAttribute("excluded-contexts", "ROOT, " + DEMO_APP);
 
         // Reload worker: the server preserves deployments across reloads, but mod_cluster
         // re-scans deployments on startup. With "demo" in excluded-contexts, ENABLE-APP
@@ -112,7 +113,7 @@ public class ContextLifecycleTest {
         log.info("Excluded context verified as inaccessible via balancer");
 
         // Verify demo is STILL accessible directly on worker (it's deployed, just not proxied)
-        final String directUrl = worker.getHttpUrl() + "/demo/";
+        final String directUrl = worker.getHttpUrl() + "/" + DEMO_APP + "/";
         HttpResponse directResponse = httpClient.get(directUrl);
         softly.assertThat(directResponse.getStatusCode())
                 .as("Excluded context should still be accessible directly")
@@ -130,7 +131,7 @@ public class ContextLifecycleTest {
         doExcludedContextsTest(
                 cluster, httpClient,
                 Arrays.asList("doesntExist"),
-                Arrays.asList("demo", "simplecontext-111", "simplecontext-222")
+                Arrays.asList(DEMO_APP, "simplecontext-111", "simplecontext-222")
         );
     }
 
@@ -142,7 +143,7 @@ public class ContextLifecycleTest {
     public void testExcludedContextsMultipleContexts(TestCluster cluster, HttpClient httpClient) throws Exception {
         doExcludedContextsTest(
                 cluster, httpClient,
-                Arrays.asList("demo", "doesntExist", "simplecontext-111"),
+                Arrays.asList(DEMO_APP, "doesntExist", "simplecontext-111"),
                 Arrays.asList("simplecontext-222")
         );
     }
@@ -155,7 +156,7 @@ public class ContextLifecycleTest {
     public void testExcludedContextsMainAndNonExistent(TestCluster cluster, HttpClient httpClient) throws Exception {
         doExcludedContextsTest(
                 cluster, httpClient,
-                Arrays.asList("demo", "doesntExist"),
+                Arrays.asList(DEMO_APP, "doesntExist"),
                 Arrays.asList("simplecontext-111", "simplecontext-222")
         );
     }
@@ -168,7 +169,7 @@ public class ContextLifecycleTest {
     public void testExcludedContextsMainOnly(TestCluster cluster, HttpClient httpClient) throws Exception {
         doExcludedContextsTest(
                 cluster, httpClient,
-                Arrays.asList("demo"),
+                Arrays.asList(DEMO_APP),
                 Arrays.asList("simplecontext-111", "simplecontext-222")
         );
     }
@@ -182,7 +183,7 @@ public class ContextLifecycleTest {
         doExcludedContextsTest(
                 cluster, httpClient,
                 Arrays.asList("doesntExist"),
-                Arrays.asList("demo", "simplecontext-111", "simplecontext-222")
+                Arrays.asList(DEMO_APP, "simplecontext-111", "simplecontext-222")
         );
     }
 
@@ -194,7 +195,7 @@ public class ContextLifecycleTest {
     public void testVirtHostExcludedContextsVol2(TestCluster cluster, HttpClient httpClient) throws Exception {
         doExcludedContextsTest(
                 cluster, httpClient,
-                Arrays.asList("demo", "doesntExist", "simplecontext-111"),
+                Arrays.asList(DEMO_APP, "doesntExist", "simplecontext-111"),
                 Arrays.asList("simplecontext-222")
         );
     }
@@ -207,7 +208,7 @@ public class ContextLifecycleTest {
     public void testVirtHostExcludedContextsVol3(TestCluster cluster, HttpClient httpClient) throws Exception {
         doExcludedContextsTest(
                 cluster, httpClient,
-                Arrays.asList("demo", "doesntExist"),
+                Arrays.asList(DEMO_APP, "doesntExist"),
                 Arrays.asList("simplecontext-111", "simplecontext-222")
         );
     }
@@ -220,7 +221,7 @@ public class ContextLifecycleTest {
     public void testVirtHostExcludedContextsVol4(TestCluster cluster, HttpClient httpClient) throws Exception {
         doExcludedContextsTest(
                 cluster, httpClient,
-                Arrays.asList("demo"),
+                Arrays.asList(DEMO_APP),
                 Arrays.asList("simplecontext-111", "simplecontext-222")
         );
     }
@@ -233,7 +234,7 @@ public class ContextLifecycleTest {
     public void testExcludedContextsWithLeadingSlash(TestCluster cluster, HttpClient httpClient) throws Exception {
         doExcludedContextsTest(
                 cluster, httpClient,
-                Arrays.asList("/simplecontext-111", "/simplecontext-222", "demo"),
+                Arrays.asList("/simplecontext-111", "/simplecontext-222", DEMO_APP),
                 Arrays.asList()
         );
     }
@@ -261,8 +262,8 @@ public class ContextLifecycleTest {
                                         List<String> accessibleContexts) throws Exception {
         cluster.startWorkers(1);
         final WildFlyContainer worker = cluster.getWorker1();
-        final File demoWar = new File("src/test/resources/deployments/demo.war");
-        final List<String> allDeployedContexts = Arrays.asList("demo", "simplecontext-111", "simplecontext-222");
+        final File demoWar = new File("src/test/resources/deployments/" + DEMO_APP + ".war");
+        final List<String> allDeployedContexts = Arrays.asList(DEMO_APP, "simplecontext-111", "simplecontext-222");
 
         // Deploy additional test applications
         worker.deployment().deploy(demoWar, "simplecontext-111.war");
@@ -361,7 +362,7 @@ public class ContextLifecycleTest {
         cluster.startWorkers(2);
         final WildFlyContainer worker1 = cluster.getWorker1();
         final WildFlyContainer worker2 = cluster.getWorker2();
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register and be accessible
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -416,7 +417,7 @@ public class ContextLifecycleTest {
         cluster.startWorkers(2);
         final WildFlyContainer worker1 = cluster.getWorker1();
         final WildFlyContainer worker2 = cluster.getWorker2();
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register and be accessible
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -471,7 +472,7 @@ public class ContextLifecycleTest {
         cluster.startWorkers(2);
         final WildFlyContainer worker1 = cluster.getWorker1();
         final WildFlyContainer worker2 = cluster.getWorker2();
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Assign both workers to the same load-balancing group (batch config before reloads)
         worker1.modCluster().setLoadBalancingGroup("groupOne");
@@ -531,7 +532,7 @@ public class ContextLifecycleTest {
         cluster.startWorkers(2);
         final WildFlyContainer worker1 = cluster.getWorker1();
         final WildFlyContainer worker2 = cluster.getWorker2();
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Assign both workers to the same load-balancing group (batch config before reloads)
         worker1.modCluster().setLoadBalancingGroup("groupOne");
@@ -589,7 +590,7 @@ public class ContextLifecycleTest {
     public void testContextStatusDisplayedAsStoppedWhenStopped(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(1);
         final WildFlyContainer worker = cluster.getWorker1();
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Verify demo is accessible
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -606,7 +607,7 @@ public class ContextLifecycleTest {
         // Wait for stop to propagate and verify context status is STOPPED
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
-                    final String status = cluster.getBalancer().getContextStatus("worker1", "/demo");
+                    final String status = cluster.getBalancer().getContextStatus("worker1", "/" + DEMO_APP);
                     assertThat(status)
                             .as("Context status should be STOPPED after stopping node")
                             .isEqualToIgnoringCase("STOPPED");
@@ -639,7 +640,7 @@ public class ContextLifecycleTest {
     @Test
     public void testSessionDrainWithEnoughTime(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -713,7 +714,7 @@ public class ContextLifecycleTest {
     @Test
     public void testSessionDrainWithoutEnoughTime(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -767,7 +768,7 @@ public class ContextLifecycleTest {
         cluster.startWorkers(1);
         WildFlyContainer worker = cluster.getWorker1();
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for context to be accessible via balancer
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -779,7 +780,7 @@ public class ContextLifecycleTest {
         log.info("Context accessible, now invoking DISABLE-CONTEXT operation");
 
         // DISABLE the context using mod_cluster management operation
-        worker.modCluster().disableContext("demo", "default-host");
+        worker.modCluster().disableContext(DEMO_APP, "default-host");
 
         // Wait for disabled state to propagate to balancer
         await().atMost(ofSeconds(15))
@@ -794,7 +795,7 @@ public class ContextLifecycleTest {
         log.info("Context successfully disabled, verifying direct access still works");
 
         // Verify deployment still exists and is accessible directly
-        String directUrl = worker.getHttpUrl() + "/demo/";
+        String directUrl = worker.getHttpUrl() + "/" + DEMO_APP + "/";
         HttpResponse directResponse = httpClient.get(directUrl);
         softly.assertThat(directResponse.getStatusCode())
                 .as("Disabled context should still be accessible directly")
@@ -802,7 +803,7 @@ public class ContextLifecycleTest {
 
         // Re-enable the context
         log.info("Re-enabling context");
-        worker.modCluster().enableContext("demo", "default-host");
+        worker.modCluster().enableContext(DEMO_APP, "default-host");
 
         // Verify context is accessible again via balancer
         await().atMost(ofSeconds(15))
@@ -835,7 +836,7 @@ public class ContextLifecycleTest {
                 .isGreaterThan(0);
 
         int timeoutSeconds = stopTimeout.asInt();
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for context to be accessible before stop
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -847,7 +848,7 @@ public class ContextLifecycleTest {
         log.info("Invoking STOP-CONTEXT operation with timeout: {} seconds", timeoutSeconds);
 
         // Invoke STOP-CONTEXT operation
-        worker.modCluster().stopContext("demo", "default-host");
+        worker.modCluster().stopContext(DEMO_APP, "default-host");
 
         // Verify context becomes unavailable via balancer
         await().atMost(ofSeconds(timeoutSeconds + 10))
@@ -881,7 +882,7 @@ public class ContextLifecycleTest {
 
         // Define test contexts (using demo.war deployed with different names)
         final List<String> testContexts = Arrays.asList("app1.war", "app2.war", "app3.war");
-        final File demoWar = new File("src/test/resources/deployments/demo.war");
+        final File demoWar = new File("src/test/resources/deployments/" + DEMO_APP + ".war");
 
         log.info("Deploying {} additional contexts to test multiple contexts per worker", testContexts.size());
 
@@ -892,7 +893,7 @@ public class ContextLifecycleTest {
         }
 
         // Wait for original demo context to be accessible
-        String demoBalancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String demoBalancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(demoBalancerUrl);
@@ -992,7 +993,7 @@ public class ContextLifecycleTest {
         cluster.startWorkers(1);
         WildFlyContainer worker = cluster.getWorker1();
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for initial deployment to be accessible
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -1004,7 +1005,7 @@ public class ContextLifecycleTest {
         log.info("Initial deployment verified, now undeploying demo.war");
 
         // UNDEPLOY the application
-        worker.deployment().undeploy("demo.war");
+        worker.deployment().undeploy(DEMO_APP + ".war");
 
         // Wait for context to unregister from balancer
         await().atMost(ofSeconds(20))
@@ -1019,7 +1020,7 @@ public class ContextLifecycleTest {
         log.info("Context unregistered from balancer after undeploy");
 
         // Verify deployment no longer exists
-        boolean isDeployed = worker.deployment().isDeployed("demo.war");
+        boolean isDeployed = worker.deployment().isDeployed(DEMO_APP + ".war");
         softly.assertThat(isDeployed)
                 .as("demo.war should not be deployed after undeploy")
                 .isFalse();
@@ -1042,7 +1043,7 @@ public class ContextLifecycleTest {
         log.info("Context re-registered with balancer after redeploy");
 
         // Verify deployment exists again
-        boolean isRedeployed = worker.deployment().isDeployed("demo.war");
+        boolean isRedeployed = worker.deployment().isDeployed(DEMO_APP + ".war");
         softly.assertThat(isRedeployed)
                 .as("demo.war should be deployed after redeploy")
                 .isTrue();

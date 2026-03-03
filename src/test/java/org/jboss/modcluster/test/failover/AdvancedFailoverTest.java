@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -41,7 +42,7 @@ public class AdvancedFailoverTest {
     public void testFailoverWithActiveSessions(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Establish session on one of the workers
         HttpResponse initialResponse = httpClient.get(balancerUrl);
@@ -89,7 +90,7 @@ public class AdvancedFailoverTest {
     public void testFailoverViaHardKill(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Establish session
         HttpResponse initialResponse = httpClient.get(balancerUrl);
@@ -137,7 +138,7 @@ public class AdvancedFailoverTest {
     public void testFailoverViaUndeploy(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Establish session
         HttpResponse initialResponse = httpClient.get(balancerUrl);
@@ -157,10 +158,10 @@ public class AdvancedFailoverTest {
         // Undeploy the app from the worker holding the session
         if ("worker1".equals(initialWorker)) {
             log.info("Undeploying demo.war from worker1 (session holder)...");
-            cluster.getWorker1().deployment().undeploy("demo.war");
+            cluster.getWorker1().deployment().undeploy(DEMO_APP + ".war");
         } else {
             log.info("Undeploying demo.war from worker2 (session holder)...");
-            cluster.getWorker2().deployment().undeploy("demo.war");
+            cluster.getWorker2().deployment().undeploy(DEMO_APP + ".war");
         }
 
         // Wait for failover and verify session still works
@@ -185,7 +186,7 @@ public class AdvancedFailoverTest {
     public void testDeterministicFailover(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(4);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for all 4 workers to register and receive traffic.
         // httpd's mod_proxy_cluster needs time to process CONFIG messages from all workers.
@@ -243,7 +244,7 @@ public class AdvancedFailoverTest {
     public void testGracefulFailoverNoDroppedRequests(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Start making continuous requests in background
         List<Integer> statusCodes = new ArrayList<>();
@@ -297,7 +298,7 @@ public class AdvancedFailoverTest {
     public void testFailoverDuringUnregistration(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register and receive traffic.
         // httpd's mod_proxy_cluster needs time to process CONFIG messages from all workers.
@@ -340,7 +341,7 @@ public class AdvancedFailoverTest {
     public void testFailoverUnderLoad(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Generate load with multiple concurrent request threads
         final int NUM_THREADS = 5;
@@ -406,7 +407,7 @@ public class AdvancedFailoverTest {
     public void testHealthCheckAndBrokenNodeTimeout(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register and receive traffic
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(3))

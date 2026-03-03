@@ -19,6 +19,7 @@ import org.wildfly.extras.creaper.core.online.operations.Values;
 import java.io.File;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -51,7 +52,7 @@ public class WorkerWithOneNotRespondingProxyTest {
         // Start one worker normally first
         cluster.startWorkers(1);
         final WildFlyContainer worker = cluster.getWorker1();
-        final File demoWar = new File("src/test/resources/deployments/demo.war");
+        final File demoWar = new File("src/test/resources/deployments/" + DEMO_APP + ".war");
 
         // Deploy additional contexts to simulate realistic load
         final int numExtraContexts = 5;
@@ -102,7 +103,7 @@ public class WorkerWithOneNotRespondingProxyTest {
                 .isLessThan(60);
 
         // Verify the worker is actually functional by checking a context via balancer
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         await().atMost(ofSeconds(30))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {

@@ -13,6 +13,7 @@ import javax.net.ssl.SSLException;
 import java.net.SocketException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
@@ -53,7 +54,7 @@ public class SslWorkerAuthenticationTest {
         cluster.startWorkers(1);
         sslConfigurator.configureMtlsWorker(cluster.getWorker1(), "node1.server", "node1.client");
 
-        final String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/demo/";
+        final String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/" + DEMO_APP + "/";
 
         // Configure authenticated mTLS client with both trust store and client certificate
         httpClient.configureMtlsClient(TRUST_STORE_RESOURCE, KEYSTORE_PASSWORD,

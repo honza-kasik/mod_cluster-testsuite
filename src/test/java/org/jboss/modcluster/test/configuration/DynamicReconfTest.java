@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -38,7 +39,7 @@ public class DynamicReconfTest {
         // Start with one worker
         cluster.startWorkers(1);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Verify only worker1 receives traffic
         Map<String, Integer> initialDistribution = httpClient.testLoadDistribution(balancerUrl, 10);
@@ -117,7 +118,7 @@ public class DynamicReconfTest {
     public void testWorkerUnregistrationAndReregistration(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Verify both workers active
         Map<String, Integer> initialDist = httpClient.testLoadDistribution(balancerUrl, 20);

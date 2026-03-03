@@ -17,6 +17,7 @@ import java.io.IOException;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -40,7 +41,7 @@ public class StickySessionTest {
         // Start two workers
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Make initial request to establish session
         HttpResponse initialResponse = httpClient.get(balancerUrl);
@@ -84,7 +85,7 @@ public class StickySessionTest {
     public void testSessionAffinityWithMultipleClients(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Simulate 5 different clients with different sessions
         for (int client = 1; client <= 5; client++) {
@@ -176,7 +177,7 @@ public class StickySessionTest {
         worker1.reload();
         worker2.reload();
 
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register with the balancer after reload
         await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
@@ -216,7 +217,7 @@ public class StickySessionTest {
                         final HttpResponse response;
                         if (useUrlEncodedSession) {
                             final String urlWithSession = cluster.getBalancer().getHttpUrl()
-                                    + "/demo/;jsessionid=" + sessionCookie;
+                                    + "/" + DEMO_APP + "/;jsessionid=" + sessionCookie;
                             response = httpClient.get(urlWithSession);
                         } else {
                             response = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);
@@ -233,7 +234,7 @@ public class StickySessionTest {
             final HttpResponse failoverResponse;
             if (useUrlEncodedSession) {
                 final String urlWithSession = cluster.getBalancer().getHttpUrl()
-                        + "/demo/;jsessionid=" + sessionCookie;
+                        + "/" + DEMO_APP + "/;jsessionid=" + sessionCookie;
                 failoverResponse = httpClient.get(urlWithSession);
             } else {
                 failoverResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + sessionCookie);

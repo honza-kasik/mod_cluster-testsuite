@@ -23,6 +23,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -313,7 +314,7 @@ public class FailoverSettingsTest {
             // httpd's mod_proxy_cluster needs time to receive CONFIG messages and
             // process ENABLE-APP for all contexts. Without this wait, deploying exit.war
             // may trigger ENABLE-APP before the MCMP connection is re-established.
-            final String demoUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+            final String demoUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
             await().atMost(ofSeconds(60)).pollInterval(ofSeconds(3))
                     .untilAsserted(() -> {
                         HttpResponse resp = httpClient.get(demoUrl);
@@ -370,7 +371,7 @@ public class FailoverSettingsTest {
         for (int i = 0; i < workerCount; i++) {
             final String workerName = "worker" + (i + 1);
             try {
-                final String directUrl = workers[i].getHttpUrl() + "/demo/";
+                final String directUrl = workers[i].getHttpUrl() + "/" + DEMO_APP + "/";
                 HttpResponse directResponse = httpClient.get(directUrl);
                 if (directResponse.getStatusCode() == 200) {
                     survivingWorkers++;

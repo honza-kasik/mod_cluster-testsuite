@@ -22,6 +22,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 
 /**
  * Tests for load calculation and metrics in mod_cluster.
@@ -54,7 +55,7 @@ public class LoadMetricsTest {
         WildFlyContainer worker2 = cluster.getWorker2();
 
         // Generate some load
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         httpClient.testLoadDistribution(balancerUrl, 50);
 
         // Read load-related configuration from worker1
@@ -107,7 +108,7 @@ public class LoadMetricsTest {
         WildFlyContainer worker1 = cluster.getWorker1();
         WildFlyContainer worker2 = cluster.getWorker2();
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Check if custom load metric module is present in container image
         boolean w1HasModule = worker1.loadMetrics().hasCustomLoadMetricModule();
@@ -326,7 +327,7 @@ public class LoadMetricsTest {
     public void testLoadBasedRouting(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2, JAVA_OPTS);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Generate traffic to observe load-based distribution
         Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 100);
@@ -368,7 +369,7 @@ public class LoadMetricsTest {
         log.info("Starting worker1 to test initial load reporting...");
         cluster.startWorkers(1, JAVA_OPTS);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Verify worker is accessible via balancer (indicates successful registration with load)
         HttpClient.HttpResponse response = httpClient.get(balancerUrl);
@@ -404,7 +405,7 @@ public class LoadMetricsTest {
         // Configure worker to use only heap metric
         worker1.loadMetrics().configureLoadMetric("heap");
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for heap metric to stabilize after configuration change
         // Try to get baseline > 10 like noe-tests (though with modern WildFly this may vary)
@@ -489,7 +490,7 @@ public class LoadMetricsTest {
         // Configure worker to use only CPU metric (it's default, but explicit)
         worker1.loadMetrics().configureLoadMetric("cpu");
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for system to stabilize - wait for load value > 70 (like noe-tests)
         log.info("Waiting for system to stabilize (load value > 70)...");
@@ -559,7 +560,7 @@ public class LoadMetricsTest {
     public void testDynamicLoadAdjustment(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2, JAVA_OPTS);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Generate multiple rounds of traffic to observe dynamic load adjustment
         Map<String, Integer> round1 = httpClient.testLoadDistribution(balancerUrl, 50);

@@ -20,6 +20,8 @@ import java.io.IOException;
  */
 public class WildFlyDeploymentManager {
 
+    public static final String DEMO_APP = "demo";
+
     private static final Logger log = LoggerFactory.getLogger(WildFlyDeploymentManager.class);
 
     private final WildFlyContainer container;
@@ -111,13 +113,13 @@ public class WildFlyDeploymentManager {
     public void deployDemoApp() {
         try {
             // Check if demo.war is already deployed
-            if (isDeployed("demo.war")) {
+            if (isDeployed(DEMO_APP + ".war")) {
                 log.debug("Demo application already deployed on worker '{}'", container.getName());
                 return;
             }
 
             // Copy demo.war from resources
-            File demoWar = new File("src/test/resources/deployments/demo.war");
+            File demoWar = new File("src/test/resources/deployments/" + DEMO_APP + ".war");
             if (demoWar.exists()) {
                 log.info("Deploying demo application to worker '{}' using Creaper", container.getName());
                 deploy(demoWar);

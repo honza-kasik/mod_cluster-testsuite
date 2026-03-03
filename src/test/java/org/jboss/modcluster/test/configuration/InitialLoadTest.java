@@ -14,6 +14,8 @@ import org.wildfly.extras.creaper.core.online.ModelNodeResult;
 import org.wildfly.extras.creaper.core.online.operations.Address;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
 
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
+
 /**
  * Tests for initial-load parameter validation in mod_cluster configuration.
  * Verifies boundary values and invalid input handling.
@@ -149,7 +151,7 @@ public class InitialLoadTest {
                 .isEqualTo(0);
 
         // Verify worker is accessible (initial load allows traffic)
-        String workerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String workerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         cluster.getHttpClient().get(workerUrl);
 
         log.info("Worker accessible with default initial-load");

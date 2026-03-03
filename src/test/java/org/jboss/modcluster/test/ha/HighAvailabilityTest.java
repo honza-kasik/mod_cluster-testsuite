@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -56,7 +57,7 @@ public class HighAvailabilityTest {
         final WildFlyContainer standby = cluster.getWorker1();
         standby.loadMetrics().setFixedLoad(0);
 
-        final String url = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String url = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for registration
         log.info("Waiting for all workers to register with balancer");
@@ -141,7 +142,7 @@ public class HighAvailabilityTest {
         final WildFlyContainer standby = cluster.getWorker1();
         standby.loadMetrics().setFixedLoad(0);
 
-        final String url = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String url = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for registration
         log.info("Waiting for all workers to register with balancer");
@@ -302,7 +303,7 @@ public class HighAvailabilityTest {
             .containsExactlyInAnyOrder(balancerName1.toLowerCase(), balancerName2.toLowerCase());
 
         // Verify sticky sessions within a group: establish session and make 10 requests
-        final String url = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String url = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         final HttpResponse initial = httpClient.get(url);
         final String sessionId = initial.getCookie("JSESSIONID");
         final String initialWorker = extractWorkerFromResponse(initial);

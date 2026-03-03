@@ -15,6 +15,8 @@ import org.wildfly.extras.creaper.core.online.ModelNodeResult;
 import org.wildfly.extras.creaper.core.online.operations.Address;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
 
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
+
 /**
  * Tests for mod_cluster management via Creaper (WildFly management API).
  * Demonstrates using Creaper for configuration and management operations.
@@ -179,7 +181,7 @@ public class CliManagementTest {
         WildFlyContainer worker = cluster.getWorker1();
 
         // Check if demo.war is deployed using Creaper
-        boolean isDeployed = worker.deployment().isDeployed("demo.war");
+        boolean isDeployed = worker.deployment().isDeployed(DEMO_APP + ".war");
 
         log.info("demo.war deployed: {}", isDeployed);
 

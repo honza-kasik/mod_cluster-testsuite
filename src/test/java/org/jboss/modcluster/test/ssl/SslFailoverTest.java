@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -63,7 +64,7 @@ public class SslFailoverTest {
     @Test
     public void testSslFailoverViaUndeploy(final TestCluster cluster, final HttpClient httpClient) throws Exception {
         sslFailoverPattern(cluster, httpClient,
-                worker -> worker.deployment().undeploy("demo.war"), "undeploy");
+                worker -> worker.deployment().undeploy(DEMO_APP + ".war"), "undeploy");
     }
 
     /**
@@ -89,7 +90,7 @@ public class SslFailoverTest {
         sslConfigurator.configureWorker(cluster.getWorker1());
         sslConfigurator.configureWorker(cluster.getWorker2());
 
-        final String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/demo/";
+        final String httpsUrl = cluster.getBalancer().getHttpsUrl() + "/" + DEMO_APP + "/";
 
         // Wait for HTTPS cluster to be functional with certificate validation
         await().atMost(ofSeconds(30))
@@ -168,7 +169,7 @@ public class SslFailoverTest {
             await().atMost(ofSeconds(30))
                     .pollInterval(ofSeconds(2))
                     .untilAsserted(() -> {
-                        assertThat(worker.deployment().isDeployed("demo.war")).isTrue();
+                        assertThat(worker.deployment().isDeployed(DEMO_APP + ".war")).isTrue();
                     });
         } else {
             log.debug("Restarting {} and reconfiguring SSL", worker.getName());

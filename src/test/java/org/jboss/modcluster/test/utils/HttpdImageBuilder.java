@@ -140,9 +140,14 @@ public class HttpdImageBuilder {
 
         // Detect RHEL version from ZIP filename (e.g. "RHEL8", "RHEL9") to pick matching base image
         String baseImage = "fedora:42";
+        String pcrePackage = "pcre";
         Matcher rhelMatcher = Pattern.compile("RHEL(\\d+)").matcher(zipFileName);
         if (rhelMatcher.find()) {
-            baseImage = "registry.access.redhat.com/ubi" + rhelMatcher.group(1) + "/ubi:latest";
+            int rhelVersion = Integer.parseInt(rhelMatcher.group(1));
+            baseImage = "registry.access.redhat.com/ubi" + rhelVersion + "/ubi:latest";
+            if (rhelVersion >= 10) {
+                pcrePackage = "pcre2";
+            }
         }
 
         log.info("Building httpd image from ZIP: {} (base: {}, tag: {})", zipFileName, baseImage, imageTag);
@@ -159,7 +164,7 @@ public class HttpdImageBuilder {
             try (FileWriter w = new FileWriter(dockerfile)) {
                 w.write(
                     "FROM " + baseImage + "\n" +
-                    "RUN dnf install -y pcre apr-util openssl unzip findutils hostname jansson mailcap && dnf clean all\n" +
+                    "RUN dnf install -y " + pcrePackage + " apr-util openssl unzip findutils hostname jansson mailcap && dnf clean all\n" +
                     "COPY " + zipFileName + " /opt/" + zipFileName + "\n" +
                     "RUN set -e && \\\n" +
                     "    unzip -q /opt/" + zipFileName + " -d /opt && rm /opt/" + zipFileName + " && \\\n" +

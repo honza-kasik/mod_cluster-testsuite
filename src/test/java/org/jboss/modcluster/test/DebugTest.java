@@ -18,6 +18,8 @@ import org.wildfly.extras.creaper.core.online.operations.Address;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
 import org.wildfly.extras.creaper.core.online.operations.ReadResourceOption;
 
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
+
 @Tag("undertow")
 @ExtendWith({ModClusterTestExtension.class, SoftAssertionsExtension.class})
 public class DebugTest {
@@ -35,14 +37,14 @@ public class DebugTest {
         // Try accessing worker directly with trailing slash
         String worker1Url = cluster.getWorker1().getContainer().getHost() + ":" +
                            cluster.getWorker1().getContainer().getMappedPort(8080);
-        String directUrl = "http://" + worker1Url + "/demo/";
+        String directUrl = "http://" + worker1Url + "/" + DEMO_APP + "/";
 
         log.info("Trying direct access to worker: {}", directUrl);
         HttpResponse directResponse = httpClient.get(directUrl);
         log.info("Direct worker response: {} - {}", directResponse.getStatusCode(), directResponse.getBody().substring(0, Math.min(200, directResponse.getBody().length())));
 
         // Try accessing via balancer with trailing slash
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         log.info("Trying balancer access: {}", balancerUrl);
         HttpResponse balancerResponse = httpClient.get(balancerUrl);
         log.info("Balancer response: {} - {}", balancerResponse.getStatusCode(), balancerResponse.getBody());

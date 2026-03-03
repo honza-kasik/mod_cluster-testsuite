@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -397,7 +398,7 @@ public class SessionManagementTest {
             Thread.sleep(5000);
         }
 
-        final String url = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String url = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         final String effectiveCookieName = cookieName != null ? cookieName : "JSESSIONID";
 
         log.info("Testing cookie name: {}", effectiveCookieName);
@@ -509,7 +510,7 @@ public class SessionManagementTest {
         // Start only worker1 initially (balancer already started by extension)
         cluster.startWorkers(1);
 
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         WildFlyContainer worker2 = null;
 
         for (int cycle = 1; cycle <= 3; cycle++) {

@@ -16,6 +16,7 @@ import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -51,7 +52,7 @@ public class SoakTest {
         cluster.startWorkers(2);
         final WildFlyContainer worker1 = cluster.getWorker1();
         final WildFlyContainer worker2 = cluster.getWorker2();
-        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
         final Random random = new Random();
 
         final int soakTestHours = Integer.getInteger("SOAK_TEST_TIME", 1);

@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.jboss.modcluster.test.utils.WildFlyDeploymentManager.DEMO_APP;
 import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
@@ -36,7 +37,7 @@ public class LoadBalancingGroupFailoverTest {
     public void testLoadDistributionAcrossWorkers(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register and receive traffic.
         // httpd's mod_proxy_cluster needs time to process CONFIG messages from all workers.
@@ -74,7 +75,7 @@ public class LoadBalancingGroupFailoverTest {
     public void testFailoverWhenWorkerStops(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
 
-        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
+        String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Verify both workers are receiving traffic
         Map<String, Integer> initialDistribution = httpClient.testLoadDistribution(balancerUrl, 20);
