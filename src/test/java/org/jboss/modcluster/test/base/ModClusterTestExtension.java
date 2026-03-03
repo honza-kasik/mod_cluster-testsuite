@@ -161,28 +161,42 @@ public class ModClusterTestExtension implements BeforeEachCallback, AfterEachCal
          * Start worker nodes.
          */
         public void startWorkers(int count) {
+            startWorkers(count, null);
+        }
+
+        /**
+         * Start worker nodes with custom JVM options.
+         *
+         * @param count number of workers to start (1-4)
+         * @param javaOpts JVM options (e.g. "-Xms64m -Xmx2g"), or null for default
+         */
+        public void startWorkers(int count, String javaOpts) {
             BalancerContainer balancer = getBalancer();
 
             if (count >= 1) {
                 WildFlyContainer worker1 = new WildFlyContainer("worker1", balancer);
+                if (javaOpts != null) worker1.withJavaOpts(javaOpts);
                 worker1.start();
                 store.put(WORKER1_KEY, worker1);
             }
 
             if (count >= 2) {
                 WildFlyContainer worker2 = new WildFlyContainer("worker2", balancer);
+                if (javaOpts != null) worker2.withJavaOpts(javaOpts);
                 worker2.start();
                 store.put(WORKER2_KEY, worker2);
             }
 
             if (count >= 3) {
                 WildFlyContainer worker3 = new WildFlyContainer("worker3", balancer);
+                if (javaOpts != null) worker3.withJavaOpts(javaOpts);
                 worker3.start();
                 store.put(WORKER3_KEY, worker3);
             }
 
             if (count >= 4) {
                 WildFlyContainer worker4 = new WildFlyContainer("worker4", balancer);
+                if (javaOpts != null) worker4.withJavaOpts(javaOpts);
                 worker4.start();
                 store.put(WORKER4_KEY, worker4);
             }

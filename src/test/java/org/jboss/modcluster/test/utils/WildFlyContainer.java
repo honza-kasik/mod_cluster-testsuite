@@ -33,6 +33,7 @@ public class WildFlyContainer {
 
     private final String name;
     private final BalancerContainer balancer;
+    private String javaOpts;
     private GenericContainer<?> container;
     private OnlineManagementClient managementClient;
     private WildFlyDeploymentManager deploymentManager;
@@ -44,6 +45,15 @@ public class WildFlyContainer {
     public WildFlyContainer(String name, BalancerContainer balancer) {
         this.name = name;
         this.balancer = balancer;
+    }
+
+    /**
+     * Override JVM options for this worker. Must be called before {@link #start()}.
+     * Useful for tests that need more heap (e.g., heap load metric tests).
+     */
+    public WildFlyContainer withJavaOpts(String javaOpts) {
+        this.javaOpts = javaOpts;
+        return this;
     }
 
     public void start() {
@@ -109,7 +119,7 @@ public class WildFlyContainer {
                         .withNetwork(balancer.getNetwork())
                         .withNetworkAliases(name)
                         .withExposedPorts(HTTP_PORT, HTTPS_PORT, MANAGEMENT_PORT)
-                        .withEnv("JAVA_OPTS", System.getProperty("wildfly.java.opts", DEFAULT_JAVA_OPTS))
+                        .withEnv("JAVA_OPTS", javaOpts != null ? javaOpts : System.getProperty("wildfly.java.opts", DEFAULT_JAVA_OPTS))
                         .withCommand("/opt/wildfly/bin/standalone.sh",
                                     "-b", "0.0.0.0",
                                     "-bmanagement", "0.0.0.0",

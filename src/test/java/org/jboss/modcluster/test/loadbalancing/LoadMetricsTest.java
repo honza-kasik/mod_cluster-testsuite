@@ -32,6 +32,14 @@ public class LoadMetricsTest {
 
     private static final Logger log = LoggerFactory.getLogger(LoadMetricsTest.class);
 
+    /**
+     * Load metrics tests need a larger heap than the default 512MB.
+     * A small heap skews load metric readings because GC pressure and JVM overhead
+     * dominate, making it hard to isolate the effect of the actual test workload.
+     * The heap test also allocates 500MB directly, which would OOM a 512MB JVM.
+     */
+    private static final String JAVA_OPTS = "-Xms64m -Xmx2g";
+
     @InjectSoftAssertions
     private SoftAssertions softly;
 
@@ -41,7 +49,7 @@ public class LoadMetricsTest {
      */
     @Test
     public void testLoadFactorCalculation(TestCluster cluster, HttpClient httpClient) throws Exception {
-        cluster.startWorkers(2);
+        cluster.startWorkers(2, JAVA_OPTS);
         WildFlyContainer worker1 = cluster.getWorker1();
         WildFlyContainer worker2 = cluster.getWorker2();
 
@@ -95,7 +103,7 @@ public class LoadMetricsTest {
      */
     @Test
     public void testCustomLoadMetrics(TestCluster cluster, HttpClient httpClient) throws Exception {
-        cluster.startWorkers(2);
+        cluster.startWorkers(2, JAVA_OPTS);
         WildFlyContainer worker1 = cluster.getWorker1();
         WildFlyContainer worker2 = cluster.getWorker2();
 
@@ -316,7 +324,7 @@ public class LoadMetricsTest {
      */
     @Test
     public void testLoadBasedRouting(TestCluster cluster, HttpClient httpClient) throws Exception {
-        cluster.startWorkers(2);
+        cluster.startWorkers(2, JAVA_OPTS);
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
@@ -358,7 +366,7 @@ public class LoadMetricsTest {
 
         // Add worker1 and verify it registers with initial load
         log.info("Starting worker1 to test initial load reporting...");
-        cluster.startWorkers(1);
+        cluster.startWorkers(1, JAVA_OPTS);
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 
@@ -389,7 +397,8 @@ public class LoadMetricsTest {
      */
     @Test
     public void testHeapLoadMetric(TestCluster cluster, HttpClient httpClient) throws Exception {
-        cluster.startWorkers(1);
+        // Heap test allocates 500MB — needs a larger heap than the default 512MB
+        cluster.startWorkers(1, JAVA_OPTS);
         WildFlyContainer worker1 = cluster.getWorker1();
 
         // Configure worker to use only heap metric
@@ -474,7 +483,7 @@ public class LoadMetricsTest {
      */
     @Test
     public void testCpuLoadMetric(TestCluster cluster, HttpClient httpClient) throws Exception {
-        cluster.startWorkers(1);
+        cluster.startWorkers(1, JAVA_OPTS);
         WildFlyContainer worker1 = cluster.getWorker1();
 
         // Configure worker to use only CPU metric (it's default, but explicit)
@@ -548,7 +557,7 @@ public class LoadMetricsTest {
      */
     @Test
     public void testDynamicLoadAdjustment(TestCluster cluster, HttpClient httpClient) throws Exception {
-        cluster.startWorkers(2);
+        cluster.startWorkers(2, JAVA_OPTS);
 
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/demo/";
 

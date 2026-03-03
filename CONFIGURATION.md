@@ -18,6 +18,12 @@ All configuration is done via Maven system properties (`-D` flags).
 | Property | Description | Default | Example |
 |----------|-------------|---------|---------|
 | `container.java.version` | Java version (11 or 17) | Auto-detect from ZIP name | `-Dcontainer.java.version=17` |
+| `wildfly.java.opts` | JVM options for WildFly workers | `-Xms64m -Xmx512m` | `-Dwildfly.java.opts="-Xms128m -Xmx1g"` |
+
+**JVM options priority** (highest to lowest):
+1. Per-instance `WildFlyContainer.withJavaOpts()` — used by tests that need specific heap (e.g., heap load metric test uses `-Xmx2g`)
+2. System property `wildfly.java.opts` — for CI-wide tuning
+3. Default: `-Xms64m -Xmx512m`
 
 **Auto-detection rules**:
 - WildFly 31+ → Java 17
@@ -122,6 +128,12 @@ mvn test \
   -Dbalancer.type=undertow \
   -Dwildfly.zip.path=/opt/artifacts/wildfly-31.0.1.Final.zip \
   -Dtestcontainers.reuse.enable=false
+
+# On memory-constrained CI nodes, reduce worker heap further
+mvn test -Pci -Dwildfly.java.opts="-Xms32m -Xmx256m"
+
+# On beefy CI nodes, give workers more room
+mvn test -Pci -Dwildfly.java.opts="-Xms256m -Xmx1g"
 ```
 
 ### Scenario 4: Quick Iteration (Development)
@@ -265,10 +277,14 @@ mvn test -DforkCount=2
 mvn test -DforkCount=2C
 ```
 
+### Worker JVM Memory
+
+Each WildFly worker defaults to `-Xms64m -Xmx512m`. The JVM starts small and grows on demand, so 4 workers use at most 2GB of heap (vs. 8GB with the old fixed 2GB setting). Override globally with `-Dwildfly.java.opts` for CI, or per-instance with `WildFlyContainer.withJavaOpts()` for individual tests that need more heap (e.g., the heap load metric test uses `-Xmx2g` to accommodate its 500MB memory allocation).
+
 ### Docker Resources
 
 Recommended Docker settings:
-- **Memory**: 6GB minimum
+- **Memory**: 4GB minimum (6GB+ for 4-worker tests)
 - **CPUs**: 2+ cores
 - **Disk**: 20GB free
 
