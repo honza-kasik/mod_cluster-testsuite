@@ -405,14 +405,13 @@ public abstract class BalancerContainer {
          */
         private void configureAsBalancer() {
             try {
-                // Wait for management interface
-                Thread.sleep(5000);
-
                 OnlineManagementClient client =
                     ManagementClient.online(
                         OnlineOptions.standalone()
                             .hostAndPort(container.getHost(), container.getMappedPort(MANAGEMENT_PORT))
                             .auth("admin", "admin")
+                            .connectionTimeout(60_000)
+                            .bootTimeout(120_000)
                             .build()
                     );
 

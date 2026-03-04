@@ -517,8 +517,8 @@ public class SSLConfigurator {
 
     // ---- Private helpers for keystore operations ----
 
-    private static final int MAX_COPY_RETRIES = 3;
-    private static final long COPY_RETRY_DELAY_MS = 500;
+    private static final int MAX_COPY_RETRIES = 5;
+    private static final long COPY_RETRY_BASE_DELAY_MS = 500;
 
     /**
      * Copies the appropriate server keystore and CA chain trust store into the container.
@@ -583,10 +583,11 @@ public class SSLConfigurator {
                 lastException = e;
 
                 if (ContainerUtils.isTransientDockerError(e) && attempt < MAX_COPY_RETRIES) {
-                    log.warn("Transient error copying '{}' on attempt {}/{}, retrying",
-                            classpathResource, attempt, MAX_COPY_RETRIES);
+                    long delay = COPY_RETRY_BASE_DELAY_MS * attempt;
+                    log.warn("Transient error copying '{}' on attempt {}/{}, retrying after {}ms",
+                            classpathResource, attempt, MAX_COPY_RETRIES, delay);
                     try {
-                        Thread.sleep(COPY_RETRY_DELAY_MS);
+                        Thread.sleep(delay);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         throw new RuntimeException("Interrupted during copy retry", ie);

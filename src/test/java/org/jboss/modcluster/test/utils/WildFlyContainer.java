@@ -136,13 +136,6 @@ public class WildFlyContainer {
                 container.start();
                 log.info("WildFly worker '{}' started{}", name, attempt > 1 ? " (attempt " + attempt + ")" : "");
 
-                // Wait a bit for management interface to be fully ready
-                try {
-                    Thread.sleep(3000);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-
                 // Configure JGroups TCP for container-based clustering
                 // (UDP multicast discovery does not work in Docker/Podman networks)
                 jgroups().configureTcpDiscovery();
@@ -419,7 +412,8 @@ public class WildFlyContainer {
             OnlineOptions options = OnlineOptions.standalone()
                     .hostAndPort(container.getHost(), container.getMappedPort(MANAGEMENT_PORT))
                     .auth("admin", "admin")
-                    .connectionTimeout(30000)
+                    .connectionTimeout(60_000)
+                    .bootTimeout(120_000)
                     .build();
 
             managementClient = ManagementClient.online(options);
@@ -557,10 +551,10 @@ public class WildFlyContainer {
         try {
             getAdministration().reload();
         } catch (Exception e) {
-            if (e.getCause() instanceof java.util.concurrent.TimeoutException) {
-                log.warn("Reload timed out for '{}', retrying with fresh connection", name);
+            if (e.getCause() instanceof java.util.concurrent.TimeoutException
+                    || (e.getMessage() != null && e.getMessage().contains("Waiting for server timed out"))) {
+                log.warn("Reload timed out for '{}', waiting with fresh connection (bootTimeout=120s)", name);
                 managementClient = null;
-                Thread.sleep(5000);
                 getAdministration().waitUntilRunning();
             } else {
                 throw e;

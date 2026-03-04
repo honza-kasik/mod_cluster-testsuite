@@ -44,9 +44,9 @@ public class UndertowSessionCookieConfigurator {
             ops.writeAttribute(sessionCookieAddr, "name", cookieName).assertSuccess();
         }
 
-        // Reload to apply changes
+        // Reload to apply changes (lightweight: no proxy reconfiguration or demo redeploy needed)
         log.debug("Reloading server to apply session cookie configuration");
-        worker.reload();
+        worker.reloadServer();
 
         log.info("Session cookie name '{}' configured on worker '{}'", cookieName, worker.getName());
     }
