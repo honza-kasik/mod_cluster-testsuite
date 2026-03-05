@@ -7,7 +7,9 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.InputStreamReader;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -35,24 +37,38 @@ public class ImageBuilder {
 
             log.info("Building Docker image from ZIP: {} with {}", zipFileName, javaVersion);
 
-            // Check if custom load metric JAR exists
+            // Check if custom load metric JAR exists — prefer Maven build output,
+            // fall back to pre-built copy in distributions/ (the build context directory)
             File customMetricJar = new File("src/test/resources/custom-load-metric/target/custom-load-metric.jar");
             File customMetricModuleXml = new File("src/test/resources/custom-load-metric/module.xml");
+            if (!customMetricJar.exists()) {
+                customMetricJar = new File(buildDir, "custom-load-metric.jar");
+            }
+            if (!customMetricModuleXml.exists()) {
+                customMetricModuleXml = new File(buildDir, "module.xml");
+            }
             boolean hasCustomMetric = customMetricJar.exists() && customMetricModuleXml.exists();
 
-            // Copy custom metric files to build context if they exist
+            // Copy custom metric files to build context if they exist (and aren't already there)
             if (hasCustomMetric) {
-                log.info("Copying custom load metric to build context");
-                java.nio.file.Files.copy(
-                    customMetricJar.toPath(),
-                    new File(buildDir, "custom-load-metric.jar").toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
-                );
-                java.nio.file.Files.copy(
-                    customMetricModuleXml.toPath(),
-                    new File(buildDir, "module.xml").toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
-                );
+                log.info("Including custom load metric module from: {}", customMetricJar.getPath());
+                File destJar = new File(buildDir, "custom-load-metric.jar");
+                File destXml = new File(buildDir, "module.xml");
+                if (!customMetricJar.equals(destJar)) {
+                    Files.copy(
+                        customMetricJar.toPath(), destJar.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING
+                    );
+                }
+                if (!customMetricModuleXml.equals(destXml)) {
+                    Files.copy(
+                        customMetricModuleXml.toPath(), destXml.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING
+                    );
+                }
+            } else {
+                log.warn("Custom load metric module not found — testCustomLoadMetrics will fail. " +
+                         "Build it with: cd src/test/resources/custom-load-metric && mvn package");
             }
 
             // Create Dockerfile

@@ -551,7 +551,8 @@ public class WildFlyContainer {
         try {
             getAdministration().reload();
         } catch (Exception e) {
-            if (e.getCause() instanceof java.util.concurrent.TimeoutException
+            if (e instanceof java.util.concurrent.TimeoutException
+                    || e.getCause() instanceof java.util.concurrent.TimeoutException
                     || (e.getMessage() != null && e.getMessage().contains("Waiting for server timed out"))) {
                 log.warn("Reload timed out for '{}', waiting with fresh connection (bootTimeout=120s)", name);
                 managementClient = null;
