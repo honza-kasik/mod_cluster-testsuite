@@ -50,23 +50,46 @@ public class WildFlyDeploymentManager {
     /**
      * Deploy an application with a custom deployment name.
      * Useful for deploying the same WAR file multiple times with different context paths.
+     * Retries on transient deployment failures (e.g., distributable.route-locator not yet available).
      *
      * @param deploymentFile The deployment file to deploy
      * @param deploymentName The name under which to deploy (e.g., "app1.war" creates /app1 context)
-     * @throws Exception if deployment fails
+     * @throws Exception if deployment fails after all retries
      */
     public void deploy(final File deploymentFile, final String deploymentName) throws Exception {
         log.info("Deploying {} as {} to worker '{}' using Creaper",
             deploymentFile.getName(), deploymentName, container.getName());
 
-        OnlineManagementClient client = container.getManagementClient();
+        final int maxRetries = 3;
+        Exception lastException = null;
 
-        // Use InputStream-based Deploy builder to specify custom deployment name
-        final FileInputStream fis = new FileInputStream(deploymentFile);
-        final Deploy deployCommand = new Deploy.Builder(fis, deploymentName, true).build();
-        client.apply(deployCommand);
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                OnlineManagementClient client = container.getManagementClient();
+                final FileInputStream fis = new FileInputStream(deploymentFile);
+                final Deploy deployCommand = new Deploy.Builder(fis, deploymentName, true).build();
+                client.apply(deployCommand);
+                log.info("Deployment {} succeeded on worker '{}'", deploymentName, container.getName());
+                return;
+            } catch (Exception e) {
+                lastException = e;
+                if (attempt < maxRetries && isTransientDeploymentError(e)) {
+                    log.warn("Transient deployment failure for '{}' on attempt {}/{}, retrying: {}",
+                            deploymentName, attempt, maxRetries, e.getMessage());
+                } else {
+                    break;
+                }
+            }
+        }
 
-        log.info("Deployment {} succeeded on worker '{}'", deploymentName, container.getName());
+        throw lastException;
+    }
+
+    private static boolean isTransientDeploymentError(Exception e) {
+        String msg = e.getMessage();
+        return msg != null && (msg.contains("route-locator")
+                || msg.contains("rolled back")
+                || msg.contains("WFLYCTL0412"));
     }
 
     /**
@@ -123,10 +146,6 @@ public class WildFlyDeploymentManager {
             if (demoWar.exists()) {
                 log.info("Deploying demo application to worker '{}' using Creaper", container.getName());
                 deploy(demoWar);
-
-                // Wait for mod_cluster to register the context with the balancer
-                log.debug("Waiting for context registration with mod_cluster...");
-                Thread.sleep(2000);
             } else {
                 log.warn("Demo application not found at: {}", demoWar.getAbsolutePath());
             }

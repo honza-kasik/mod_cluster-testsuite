@@ -57,7 +57,7 @@ public class ContextLifecycleTest {
 
         // Verify demo.war is deployed and accessible (auto-enabled)
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode())
@@ -80,7 +80,7 @@ public class ContextLifecycleTest {
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Verify demo is initially accessible via balancer
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode()).isEqualTo(200);
@@ -274,7 +274,7 @@ public class ContextLifecycleTest {
         // Wait for ALL contexts to register on the balancer
         for (String contextName : allDeployedContexts) {
             final String url = cluster.getBalancer().getHttpUrl() + "/" + contextName + "/";
-            await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+            await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                     .untilAsserted(() -> {
                         HttpResponse response = httpClient.get(url);
                         assertThat(response.getStatusCode())
@@ -322,8 +322,11 @@ public class ContextLifecycleTest {
                 log.info("Context '{}' is accessible via balancer as expected", contextName);
             }
         } else {
-            // All contexts are excluded; wait for worker to register (node only, no contexts)
-            Thread.sleep(10000);
+            // All contexts are excluded; wait for worker to register on balancer (node only, no contexts)
+            await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
+                    .untilAsserted(() -> assertThat(cluster.getBalancer().getWorkerInfo())
+                            .as("Worker should register on balancer even with all contexts excluded")
+                            .isNotEmpty());
         }
 
         // Verify excluded contexts are NOT accessible via balancer
@@ -334,7 +337,7 @@ public class ContextLifecycleTest {
             final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + normalizedContext + "/";
 
             // Poll until the excluded context is no longer routed (broken-node-timeout + CI delay)
-            await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+            await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                     .untilAsserted(() -> {
                         HttpResponse resp = httpClient.get(balancerUrl);
                         assertThat(resp.getStatusCode())
@@ -368,7 +371,7 @@ public class ContextLifecycleTest {
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register and be accessible
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 10);
                     assertThat(distribution).containsKey("worker1");
@@ -379,10 +382,9 @@ public class ContextLifecycleTest {
 
         // Disable worker1 via the balancer proxy
         cluster.getBalancer().disableNode("worker1");
-        Thread.sleep(2000);
 
         // Verify all requests go to worker2
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 20);
                     assertThat(distribution.getOrDefault("worker1", 0))
@@ -423,7 +425,7 @@ public class ContextLifecycleTest {
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register and be accessible
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 10);
                     assertThat(distribution).containsKey("worker1");
@@ -434,10 +436,9 @@ public class ContextLifecycleTest {
 
         // Stop worker1 via the balancer proxy
         cluster.getBalancer().stopNode("worker1");
-        Thread.sleep(2000);
 
         // Verify all requests go to worker2
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 20);
                     assertThat(distribution.getOrDefault("worker1", 0))
@@ -477,14 +478,14 @@ public class ContextLifecycleTest {
         final WildFlyContainer worker2 = cluster.getWorker2();
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
-        // Assign both workers to the same load-balancing group (batch config before reloads)
+        // Assign both workers to the same load-balancing group (lightweight reload, no proxy reconfig needed)
         worker1.modCluster().setLoadBalancingGroup("groupOne");
         worker2.modCluster().setLoadBalancingGroup("groupOne");
-        worker1.reload();
-        worker2.reload();
+        worker1.reloadServer();
+        worker2.reloadServer();
 
         // Wait for registration and verify accessible
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode()).isEqualTo(200);
@@ -494,11 +495,10 @@ public class ContextLifecycleTest {
 
         // Disable the group via the balancer proxy
         cluster.getBalancer().disableLoadBalancingGroup("groupOne");
-        Thread.sleep(2000);
 
         // Verify requests are rejected (no workers available for new sessions).
         // Undertow returns 503 (Service Unavailable), httpd returns 404 (context not routable).
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode())
@@ -510,10 +510,9 @@ public class ContextLifecycleTest {
 
         // Re-enable the group
         cluster.getBalancer().enableLoadBalancingGroup("groupOne");
-        Thread.sleep(2000);
 
         // Verify accessible again
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode())
@@ -537,14 +536,14 @@ public class ContextLifecycleTest {
         final WildFlyContainer worker2 = cluster.getWorker2();
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
-        // Assign both workers to the same load-balancing group (batch config before reloads)
+        // Assign both workers to the same load-balancing group (lightweight reload, no proxy reconfig needed)
         worker1.modCluster().setLoadBalancingGroup("groupOne");
         worker2.modCluster().setLoadBalancingGroup("groupOne");
-        worker1.reload();
-        worker2.reload();
+        worker1.reloadServer();
+        worker2.reloadServer();
 
         // Wait for registration and verify accessible
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode()).isEqualTo(200);
@@ -554,11 +553,10 @@ public class ContextLifecycleTest {
 
         // Stop the group via the balancer proxy
         cluster.getBalancer().stopLoadBalancingGroup("groupOne");
-        Thread.sleep(2000);
 
         // Verify requests are rejected (no workers available).
         // Undertow returns 503 (Service Unavailable), httpd returns 404 (context not routable).
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode())
@@ -570,10 +568,9 @@ public class ContextLifecycleTest {
 
         // Re-enable the group
         cluster.getBalancer().enableLoadBalancingGroup("groupOne");
-        Thread.sleep(2000);
 
         // Verify accessible again
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode())
@@ -596,7 +593,7 @@ public class ContextLifecycleTest {
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Verify demo is accessible
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode()).isEqualTo(200);
@@ -608,7 +605,7 @@ public class ContextLifecycleTest {
         cluster.getBalancer().stopNode("worker1");
 
         // Wait for stop to propagate and verify context status is STOPPED
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final String status = cluster.getBalancer().getContextStatus("worker1", "/" + DEMO_APP);
                     assertThat(status)
@@ -620,10 +617,9 @@ public class ContextLifecycleTest {
 
         // Re-enable the node
         cluster.getBalancer().enableNode("worker1");
-        Thread.sleep(2000);
 
         // Verify demo is accessible again
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode())
@@ -646,7 +642,7 @@ public class ContextLifecycleTest {
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 10);
                     assertThat(distribution).containsKey("worker1");
@@ -674,7 +670,6 @@ public class ContextLifecycleTest {
 
         // Disable worker1 via balancer proxy (existing sessions preserved, no new sessions)
         cluster.getBalancer().disableNode("worker1");
-        Thread.sleep(2000);
 
         // Verify existing session is still served by worker1 during draining
         final HttpResponse drainingResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + jsessionId);
@@ -697,7 +692,7 @@ public class ContextLifecycleTest {
         cluster.getBalancer().stopNode("worker1");
 
         // Wait for session to fail over to worker2
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse failoverResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + jsessionId);
                     assertThat(failoverResponse.getStatusCode()).isEqualTo(200);
@@ -720,7 +715,7 @@ public class ContextLifecycleTest {
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for both workers to register
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final Map<String, Integer> distribution = httpClient.testLoadDistribution(balancerUrl, 10);
                     assertThat(distribution).containsKey("worker1");
@@ -750,7 +745,7 @@ public class ContextLifecycleTest {
         cluster.getBalancer().stopNode("worker1");
 
         // Verify session fails over to worker2
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     final HttpResponse failoverResponse = httpClient.getWithSession(balancerUrl, "JSESSIONID=" + jsessionId);
                     assertThat(failoverResponse.getStatusCode()).isEqualTo(200);
@@ -774,7 +769,7 @@ public class ContextLifecycleTest {
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for context to be accessible via balancer
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode()).isEqualTo(200);
@@ -842,7 +837,7 @@ public class ContextLifecycleTest {
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for context to be accessible before stop
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode()).isEqualTo(200);
@@ -897,7 +892,7 @@ public class ContextLifecycleTest {
 
         // Wait for original demo context to be accessible
         String demoBalancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(demoBalancerUrl);
                     assertThat(response.getStatusCode()).isEqualTo(200);
@@ -909,7 +904,7 @@ public class ContextLifecycleTest {
             String contextPath = contextName.replace(".war", "");
             String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + contextPath + "/";
 
-            await().atMost(ofSeconds(15))
+            await().atMost(ofSeconds(60))
                     .pollInterval(ofSeconds(2))
                     .untilAsserted(() -> {
                         HttpResponse response = httpClient.get(balancerUrl);
@@ -943,7 +938,7 @@ public class ContextLifecycleTest {
         worker.deployment().undeploy(testContext);
 
         // Verify undeployed context is no longer accessible
-        await().atMost(ofSeconds(15))
+        await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(
@@ -999,7 +994,7 @@ public class ContextLifecycleTest {
         String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
 
         // Wait for initial deployment to be accessible
-        await().atMost(ofSeconds(30)).pollInterval(ofSeconds(2))
+        await().atMost(ofSeconds(60)).pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
                     assertThat(response.getStatusCode()).isEqualTo(200);
