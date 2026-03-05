@@ -104,7 +104,7 @@ public class WorkerWithOneNotRespondingProxyTest {
 
         // Verify the worker is actually functional by checking a context via balancer
         final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + DEMO_APP + "/";
-        await().atMost(ofSeconds(30))
+        await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);

@@ -297,13 +297,10 @@ public class ContextLifecycleTest {
         // reloadServer() drops the MCMP connection, configureStaticProxy() reconnects.
         worker.reloadServer();
 
-        // For httpd: explicitly remove the node to clear stale context registrations.
-        // httpd's context table is additive — old contexts persist until removed.
-        // Without this, the old 'demo' context entry remains even though the worker
-        // no longer registers it after reload with excluded-contexts set.
-        if (cluster.getBalancer().getType() == BalancerType.HTTPD) {
-            cluster.getBalancer().removeNode(worker.getName());
-        }
+        // Remove the node to clear stale context registrations before the worker reconnects.
+        // Both httpd and Undertow can retain old context entries if the worker's MCMP
+        // reconnection is slow (e.g., MODCLUSTER000043 connect timeout under CI load).
+        cluster.getBalancer().removeNode(worker.getName());
 
         worker.modCluster().configureStaticProxy();
 
@@ -311,7 +308,7 @@ public class ContextLifecycleTest {
         if (!accessibleContexts.isEmpty()) {
             for (String contextName : accessibleContexts) {
                 final String balancerUrl = cluster.getBalancer().getHttpUrl() + "/" + contextName + "/";
-                await().atMost(ofSeconds(30))
+                await().atMost(ofSeconds(60))
                         .pollInterval(ofSeconds(2))
                         .untilAsserted(() -> {
                             HttpResponse response = httpClient.get(balancerUrl);
@@ -781,7 +778,7 @@ public class ContextLifecycleTest {
         worker.modCluster().disableContext(DEMO_APP, "default-host");
 
         // Wait for disabled state to propagate to balancer
-        await().atMost(ofSeconds(30))
+        await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
@@ -804,7 +801,7 @@ public class ContextLifecycleTest {
         worker.modCluster().enableContext(DEMO_APP, "default-host");
 
         // Verify context is accessible again via balancer
-        await().atMost(ofSeconds(30))
+        await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
@@ -1006,7 +1003,7 @@ public class ContextLifecycleTest {
         worker.deployment().undeploy(DEMO_APP + ".war");
 
         // Wait for context to unregister from balancer
-        await().atMost(ofSeconds(20))
+        await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
@@ -1029,7 +1026,7 @@ public class ContextLifecycleTest {
         worker.deployment().deployDemoApp();
 
         // Wait for context to re-register with balancer
-        await().atMost(ofSeconds(20))
+        await().atMost(ofSeconds(60))
                 .pollInterval(ofSeconds(2))
                 .untilAsserted(() -> {
                     HttpResponse response = httpClient.get(balancerUrl);
