@@ -8,6 +8,9 @@ import org.wildfly.extras.creaper.core.online.operations.Address;
 import org.wildfly.extras.creaper.core.online.operations.Operations;
 import org.wildfly.extras.creaper.core.online.operations.Values;
 
+import org.awaitility.core.ConditionTimeoutException;
+import org.testcontainers.containers.Container.ExecResult;
+
 import java.time.Duration;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -54,6 +57,38 @@ public class WildFlyJGroupsManager {
             ops.removeIfExists(Address.subsystem("jgroups")
                 .and("stack", "tcp")
                 .and("protocol", "MPING"));
+
+            // Configure TCP transport for container networking.
+            // When JGroups binds to 0.0.0.0, it auto-detects a physical address via
+            // InetAddress.getLocalHost(). In Podman rootless containers this often resolves
+            // to 127.0.0.1 or a wrong interface, making the node unreachable by peers.
+            // Setting external_addr forces JGroups to publish the Docker/Podman
+            // DNS-resolvable hostname instead, and increasing sock_conn_timeout handles
+            // the extra latency in Podman rootless networking (slirp4netns/pasta).
+            Address tcpTransport = Address.subsystem("jgroups")
+                .and("stack", "tcp")
+                .and("transport", "TCP");
+            ops.invoke("map-put", tcpTransport,
+                Values.of("name", "properties")
+                    .and("key", "external_addr")
+                    .and("value", container.getName())).assertSuccess();
+            ops.invoke("map-put", tcpTransport,
+                Values.of("name", "properties")
+                    .and("key", "sock_conn_timeout")
+                    .and("value", "10000")).assertSuccess();
+            log.info("JGroups TCP transport configured: external_addr='{}', sock_conn_timeout=10000 on worker '{}'",
+                container.getName(), container.getName());
+
+            // Increase GMS join_timeout from default 2s to 10s.
+            // In Podman rootless, TCP connections between containers may take several
+            // seconds due to SYN retransmits through slirp4netns/pasta networking.
+            Address gmsAddress = Address.subsystem("jgroups")
+                .and("stack", "tcp")
+                .and("protocol", "pbcast.GMS");
+            ops.invoke("map-put", gmsAddress,
+                Values.of("name", "properties")
+                    .and("key", "join_timeout")
+                    .and("value", "10000")).assertSuccess();
 
             // Add TCPPING at position 0 (top of stack) with container network aliases.
             // add-index=0 is critical: discovery protocols must be at the top of the
@@ -117,21 +152,63 @@ public class WildFlyJGroupsManager {
     /**
      * Wait until the JGroups cluster has at least the expected number of members.
      * Polls the cluster view until the expected membership count is reached or timeout expires.
+     * On timeout, logs network diagnostics to help debug connectivity issues.
      *
      * @param expectedMembers minimum number of expected cluster members
      * @param timeout maximum time to wait
      */
     public void waitForClusterFormation(int expectedMembers, Duration timeout) {
         log.info("Waiting for JGroups cluster to form with {} members on '{}'...", expectedMembers, container.getName());
-        await().atMost(timeout)
-            .pollInterval(Duration.ofSeconds(2))
-            .untilAsserted(() -> {
-                int size = getClusterViewSize();
-                assertThat(size)
-                    .as("JGroups cluster on '%s' should have at least %d members (current: %d)",
-                        container.getName(), expectedMembers, size)
-                    .isGreaterThanOrEqualTo(expectedMembers);
-            });
-        log.info("JGroups cluster formed with {} members on '{}'", expectedMembers, container.getName());
+        try {
+            await().atMost(timeout)
+                .pollInterval(Duration.ofSeconds(2))
+                .untilAsserted(() -> {
+                    int size = getClusterViewSize();
+                    assertThat(size)
+                        .as("JGroups cluster on '%s' should have at least %d members (current: %d)",
+                            container.getName(), expectedMembers, size)
+                        .isGreaterThanOrEqualTo(expectedMembers);
+                });
+            log.info("JGroups cluster formed with {} members on '{}'", expectedMembers, container.getName());
+        } catch (ConditionTimeoutException e) {
+            logNetworkDiagnostics();
+            throw e;
+        }
+    }
+
+    /**
+     * Log network diagnostics from this container to help debug cluster formation failures.
+     * Tests DNS resolution and TCP connectivity to all worker hostnames.
+     */
+    private void logNetworkDiagnostics() {
+        log.warn("=== Network diagnostics from '{}' (cluster formation failed) ===", container.getName());
+        try {
+            // Show /etc/hosts to check hostname resolution
+            ExecResult hostsResult = container.getContainer().execInContainer("cat", "/etc/hosts");
+            log.warn("/etc/hosts on '{}':\n{}", container.getName(), hostsResult.getStdout().trim());
+
+            // Test DNS and TCP connectivity to each worker
+            String[] workers = {"worker1", "worker2", "worker3", "worker4"};
+            for (String worker : workers) {
+                if (worker.equals(container.getName())) continue;
+
+                ExecResult dnsResult = container.getContainer().execInContainer("getent", "hosts", worker);
+                log.warn("DNS '{}' from '{}': exit={} result='{}'",
+                    worker, container.getName(), dnsResult.getExitCode(), dnsResult.getStdout().trim());
+
+                if (dnsResult.getExitCode() == 0) {
+                    ExecResult tcpResult = container.getContainer().execInContainer("bash", "-c",
+                        "timeout 3 bash -c 'echo > /dev/tcp/" + worker + "/7600' 2>&1 && echo 'TCP_OK' || echo 'TCP_FAIL'");
+                    log.warn("TCP {}:7600 from '{}': {}",
+                        worker, container.getName(), tcpResult.getStdout().trim());
+                }
+            }
+
+            // Show network interfaces
+            ExecResult ipResult = container.getContainer().execInContainer("ip", "addr", "show");
+            log.warn("Network interfaces on '{}':\n{}", container.getName(), ipResult.getStdout().trim());
+        } catch (Exception ex) {
+            log.warn("Failed to collect diagnostics from '{}': {}", container.getName(), ex.getMessage());
+        }
     }
 }
