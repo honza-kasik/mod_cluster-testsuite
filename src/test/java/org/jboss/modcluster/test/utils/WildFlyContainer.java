@@ -29,6 +29,8 @@ public class WildFlyContainer {
     private static final int HTTP_PORT = 8080;
     private static final int HTTPS_PORT = 8443;
     private static final int MANAGEMENT_PORT = 9990;
+    private static final int JGROUPS_TCP_PORT = 7600;
+    private static final int JGROUPS_FD_PORT = 57600;
     private static final String DEFAULT_JAVA_OPTS = "-Xms64m -Xmx512m";
 
     private final String name;
@@ -118,7 +120,7 @@ public class WildFlyContainer {
                 container = new GenericContainer<>(imageName)
                         .withNetwork(balancer.getNetwork())
                         .withNetworkAliases(name)
-                        .withExposedPorts(HTTP_PORT, HTTPS_PORT, MANAGEMENT_PORT)
+                        .withExposedPorts(HTTP_PORT, HTTPS_PORT, MANAGEMENT_PORT, JGROUPS_TCP_PORT, JGROUPS_FD_PORT)
                         .withEnv("JAVA_OPTS", javaOpts != null ? javaOpts : System.getProperty("wildfly.java.opts", DEFAULT_JAVA_OPTS))
                         .withCommand("/opt/wildfly/bin/standalone.sh",
                                     "-b", "0.0.0.0",
