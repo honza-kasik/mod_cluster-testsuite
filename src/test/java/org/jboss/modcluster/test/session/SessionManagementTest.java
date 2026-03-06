@@ -48,14 +48,17 @@ public class SessionManagementTest {
     @Test
     public void testSessionTimeoutPreservedAfterShutdown(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
-        // Wait for JGroups cluster to form so Infinispan can replicate sessions
-        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
         configureSessionDrainingNever(cluster.getWorker1(), cluster.getWorker2());
 
-        // Deploy app with 1-minute timeout
+        // Deploy distributable app with 1-minute timeout
         final File timeoutApp = SessionTimeoutAppBuilder.createApp(1);
         cluster.getWorker1().deployment().deploy(timeoutApp, "timeout-test.war");
         cluster.getWorker2().deployment().deploy(timeoutApp, "timeout-test.war");
+
+        // Wait for JGroups cluster to form AFTER deploying the distributable app.
+        // JGroups channels are lazy-started in WildFly — the 'ee' channel only starts
+        // when a <distributable/> app is deployed, triggering Infinispan cache creation.
+        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
 
@@ -113,13 +116,15 @@ public class SessionManagementTest {
     @Test
     public void testSessionTimeoutPreservedAfterKill(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
-        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
         configureSessionDrainingNever(cluster.getWorker1(), cluster.getWorker2());
 
-        // Deploy app with 1-minute timeout
+        // Deploy distributable app with 1-minute timeout
         final File timeoutApp = SessionTimeoutAppBuilder.createApp(1);
         cluster.getWorker1().deployment().deploy(timeoutApp, "timeout-test.war");
         cluster.getWorker2().deployment().deploy(timeoutApp, "timeout-test.war");
+
+        // Wait for JGroups cluster after distributable app triggers channel start
+        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
 
@@ -175,13 +180,15 @@ public class SessionManagementTest {
     @Test
     public void testSessionTimeoutPreservedAfterUndeploy(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
-        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
         configureSessionDrainingNever(cluster.getWorker1(), cluster.getWorker2());
 
-        // Deploy app with 1-minute timeout
+        // Deploy distributable app with 1-minute timeout
         final File timeoutApp = SessionTimeoutAppBuilder.createApp(1);
         cluster.getWorker1().deployment().deploy(timeoutApp, "timeout-test.war");
         cluster.getWorker2().deployment().deploy(timeoutApp, "timeout-test.war");
+
+        // Wait for JGroups cluster after distributable app triggers channel start
+        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
 
@@ -245,13 +252,15 @@ public class SessionManagementTest {
     @Test
     public void testSessionTimeoutPreservedAfterStopContext(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
-        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
         configureSessionDrainingNever(cluster.getWorker1(), cluster.getWorker2());
 
-        // Deploy app with 1-minute timeout
+        // Deploy distributable app with 1-minute timeout
         final File timeoutApp = SessionTimeoutAppBuilder.createApp(1);
         cluster.getWorker1().deployment().deploy(timeoutApp, "timeout-test.war");
         cluster.getWorker2().deployment().deploy(timeoutApp, "timeout-test.war");
+
+        // Wait for JGroups cluster after distributable app triggers channel start
+        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
 
@@ -305,13 +314,15 @@ public class SessionManagementTest {
     @Test
     public void testSessionTimeoutPreservedAfterDisableContext(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
-        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
         configureSessionDrainingNever(cluster.getWorker1(), cluster.getWorker2());
 
-        // Deploy app with 1-minute timeout
+        // Deploy distributable app with 1-minute timeout
         final File timeoutApp = SessionTimeoutAppBuilder.createApp(1);
         cluster.getWorker1().deployment().deploy(timeoutApp, "timeout-test.war");
         cluster.getWorker2().deployment().deploy(timeoutApp, "timeout-test.war");
+
+        // Wait for JGroups cluster after distributable app triggers channel start
+        cluster.getWorker1().jgroups().waitForClusterFormation(2, ofSeconds(60));
 
         final String url = cluster.getBalancer().getHttpUrl() + "/timeout-test/";
 
