@@ -39,6 +39,25 @@ public class WildFlyJGroupsManager {
      * Required because UDP multicast discovery does not work in Docker/Podman networks.
      * Workers discover each other using container network aliases (worker1, worker2, etc.).
      * Changes are persistent and take effect after reload.
+     *
+     * <h3>Why TCP/TCPPING instead of UDP multicast</h3>
+     * <p>The default {@code standalone-ha.xml} UDP stack uses MPING (multicast discovery) which
+     * requires UDP multicast between containers. Docker bridge networks historically don't forward
+     * multicast. Podman with netavark bridge networks may support it, but this is not guaranteed
+     * across all environments (CI, different Podman versions, Docker). TCPPING with static member
+     * lists is deterministic and works in all container networking configurations.</p>
+     *
+     * <h3>Criteria for switching back to UDP multicast</h3>
+     * <ul>
+     *   <li>Verify UDP multicast works on the target Podman/Docker bridge network
+     *       (pasta networking with netavark may support it)</li>
+     *   <li>Verify multicast works on CI environment (not just local)</li>
+     *   <li>If multicast works: remove this method entirely, keep default UDP stack,
+     *       only set {@code external_addr} on UDP transport — FD_SOCK, FD_ALL, MPING
+     *       all work out of the box</li>
+     *   <li>Test with {@code standalone-ha.xml} default UDP stack +
+     *       {@code -Djboss.default.multicast.address=<address>} to verify cluster formation</li>
+     * </ul>
      */
     public void configureTcpDiscovery() {
         try {
@@ -78,6 +97,45 @@ public class WildFlyJGroupsManager {
                     .and("value", "10000")).assertSuccess();
             log.info("JGroups TCP transport configured: external_addr='{}', sock_conn_timeout=10000 on worker '{}'",
                 container.getName(), container.getName());
+
+            // Configure FD_SOCK2 external_addr so the socket-based failure detector
+            // publishes a reachable address. Without this, FD_SOCK2 publishes 127.0.0.1
+            // or a wrong interface address, and peers cannot connect to verify liveness.
+            // This forces fallback to FD_ALL3 heartbeat detection (~42s delay), causing
+            // Infinispan timeouts and HTTP 500 errors during failover.
+            // EAP 8.1.4 (WildFly Core 27) models FD_SOCK2 as a regular protocol.
+            Address fdSock2Address = Address.subsystem("jgroups")
+                .and("stack", "tcp")
+                .and("protocol", "FD_SOCK2");
+            if (ops.exists(fdSock2Address)) {
+                ops.invoke("map-put", fdSock2Address,
+                    Values.of("name", "properties")
+                        .and("key", "external_addr")
+                        .and("value", container.getName())).assertSuccess();
+                log.info("FD_SOCK2 external_addr='{}' configured on worker '{}'",
+                    container.getName(), container.getName());
+            } else {
+                throw new IllegalStateException("FD_SOCK2 protocol not found in TCP stack on worker '" +
+                    container.getName() + "' — expected at /subsystem=jgroups/stack=tcp/protocol=FD_SOCK2");
+            }
+
+            // Tune FD_ALL3 as a safety net: reduce timeout from 40s to 10s and
+            // interval from 8s to 3s for faster backup failure detection if FD_SOCK2
+            // somehow fails to detect a crash.
+            Address fdAll3Address = Address.subsystem("jgroups")
+                .and("stack", "tcp")
+                .and("protocol", "FD_ALL3");
+            if (ops.exists(fdAll3Address)) {
+                ops.invoke("map-put", fdAll3Address,
+                    Values.of("name", "properties")
+                        .and("key", "timeout")
+                        .and("value", "10000")).assertSuccess();
+                ops.invoke("map-put", fdAll3Address,
+                    Values.of("name", "properties")
+                        .and("key", "interval")
+                        .and("value", "3000")).assertSuccess();
+                log.info("FD_ALL3 tuned: timeout=10000, interval=3000 on worker '{}'", container.getName());
+            }
 
             // Increase GMS join_timeout from default 2s to 10s.
             // In Podman rootless, TCP connections between containers may take several
