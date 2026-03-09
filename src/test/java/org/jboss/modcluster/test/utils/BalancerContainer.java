@@ -458,6 +458,7 @@ public abstract class BalancerContainer {
                         .and("advertise-socket-binding", "modcluster")
                         .and("health-check-interval", 5)  // Check worker health every 5 seconds
                         .and("broken-node-timeout", 10)   // Mark as down after 10 seconds of no response
+                        .and("max-retries", 1)             // Retry on another backend when sticky target fails
                         .and("failover-strategy", "LOAD_BALANCED"))  // Failover to least loaded node
                     .assertSuccess("Failed to add mod_cluster filter");
                 log.info("Mod_cluster filter created with health checks and failover enabled");

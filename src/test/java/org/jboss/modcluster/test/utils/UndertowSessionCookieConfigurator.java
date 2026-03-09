@@ -32,17 +32,21 @@ public class UndertowSessionCookieConfigurator {
             .and("servlet-container", "default")
             .and("setting", "session-cookie");
 
-        // Add session-cookie setting if it doesn't exist
-        if (!ops.exists(sessionCookieAddr)) {
-            log.debug("Creating session-cookie configuration");
-            ops.add(sessionCookieAddr, Values.of("http-only", true)).assertSuccess();
+        // Remove existing session-cookie setting to ensure clean state.
+        // On EAP 8.1.4 under CI load (Podman rootless), writeAttribute after add
+        // can silently fail to apply — using remove+add ensures atomic configuration.
+        if (ops.exists(sessionCookieAddr)) {
+            log.debug("Removing existing session-cookie configuration");
+            ops.remove(sessionCookieAddr).assertSuccess();
         }
 
-        // Set custom name if provided
+        // Add session-cookie setting with all attributes in one operation
+        Values values = Values.of("http-only", true);
         if (cookieName != null) {
-            log.debug("Setting cookie name to '{}'", cookieName);
-            ops.writeAttribute(sessionCookieAddr, "name", cookieName).assertSuccess();
+            values = values.and("name", cookieName);
         }
+        log.debug("Creating session-cookie configuration with name '{}'", cookieName);
+        ops.add(sessionCookieAddr, values).assertSuccess();
 
         // Reload to apply changes (lightweight: no proxy reconfiguration or demo redeploy needed)
         log.debug("Reloading server to apply session cookie configuration");
