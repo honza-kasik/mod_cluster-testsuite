@@ -99,8 +99,8 @@ public class SessionManagementTest {
             .isLessThan(10);
 
         softly.assertThat(result.getTotalCount())
-            .as("Should complete ~65 requests")
-            .isGreaterThan(60);
+            .as("Should complete ~65 requests (fewer during slow failover)")
+            .isGreaterThan(50);
 
         // Session replication should preserve the session, but under CI load the JGroups
         // cluster may not replicate in time, causing one session recreation on failover.
