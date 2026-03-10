@@ -42,17 +42,16 @@ public class SessionManagementTest {
     private SoftAssertions softly;
 
     /**
-     * Verifies that session timeout is NOT hit after failover despite configured 2-minute timeout.
-     * Passes if continuous requests for 130 seconds succeed after worker shutdown without session expiration.
+     * Verifies that session timeout is NOT hit after failover despite configured 1-minute timeout.
+     * Passes if continuous requests for 80 seconds succeed after worker shutdown without session expiration.
      */
     @Test
     public void testSessionTimeoutPreservedAfterShutdown(TestCluster cluster, HttpClient httpClient) throws Exception {
         cluster.startWorkers(2);
         configureSessionDrainingNever(cluster.getWorker1(), cluster.getWorker2());
 
-        // Deploy distributable app with 2-minute timeout (extra margin for JGroups
-        // VERIFY_SUSPECT2 blocking Infinispan session access during graceful shutdown)
-        final File timeoutApp = SessionTimeoutAppBuilder.createApp(2);
+        // Deploy distributable app with 1-minute timeout
+        final File timeoutApp = SessionTimeoutAppBuilder.createApp(1);
         cluster.getWorker1().deployment().deploy(timeoutApp, "timeout-test.war");
         cluster.getWorker2().deployment().deploy(timeoutApp, "timeout-test.war");
 
@@ -77,19 +76,19 @@ public class SessionManagementTest {
 
         log.info("Session established: {}", sessionCookie);
 
-        // Continuous requests for 130 seconds (exceeds 2-minute timeout boundary to prove
-        // lastAccessedTime survives failover — session would expire at ~120s if not refreshed).
+        // Continuous requests for 80 seconds (exceeds 1-minute timeout boundary to prove
+        // lastAccessedTime survives failover — session would expire at ~60s if not refreshed).
         final ContinuousRequestRunner runner = new ContinuousRequestRunner(httpClient, url, sessionCookie);
         final Future<ContinuousRequestRunner.RequestResult> resultFuture = runner.startAsync(
-            Duration.ofSeconds(130), Duration.ofMillis(1000));
+            Duration.ofSeconds(80), Duration.ofMillis(1000));
 
-        // After 5 seconds warmup, gracefully shutdown worker1
+        // After 5 seconds warmup, gracefully shutdown worker1 via management API
         Thread.sleep(5000);
         log.info("Shutting down worker1 during continuous requests");
-        cluster.getWorker1().stop();
+        cluster.getWorker1().shutdown();
 
         // Wait for continuous requests to complete
-        final ContinuousRequestRunner.RequestResult result = resultFuture.get(200, TimeUnit.SECONDS);
+        final ContinuousRequestRunner.RequestResult result = resultFuture.get(150, TimeUnit.SECONDS);
 
         log.info("Continuous requests completed: {} total, {} failed, {} session ID changes",
                  result.getTotalCount(), result.getFailedCount(), result.getSessionIdChanges());
@@ -103,8 +102,8 @@ public class SessionManagementTest {
             .isLessThan(25);
 
         softly.assertThat(result.getTotalCount())
-            .as("Should complete most of the ~130 requests")
-            .isGreaterThan(100);
+            .as("Should complete most of the ~80 requests")
+            .isGreaterThan(55);
 
         // Session replication should preserve the session, but under CI load the JGroups
         // cluster may not replicate in time, causing one session recreation on failover.

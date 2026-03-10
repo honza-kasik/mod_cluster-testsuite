@@ -281,6 +281,23 @@ public class WildFlyContainer {
         return "openjdk-17";
     }
 
+    public void shutdown() {
+        if (managementClient != null) {
+            try {
+                log.info("Initiating management API shutdown for worker '{}'", name);
+                new Administration(managementClient).shutdown();
+                Thread.sleep(2000); // Let JGroups send LEAVE
+            } catch (IOException e) {
+                log.debug("Management connection closed during shutdown (expected): {}", e.getMessage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                log.warn("Management API shutdown failed for '{}': {}", name, e.getMessage());
+            }
+        }
+        stop(); // Docker container cleanup
+    }
+
     public void stop() {
         // Close management client
         if (managementClient != null) {
