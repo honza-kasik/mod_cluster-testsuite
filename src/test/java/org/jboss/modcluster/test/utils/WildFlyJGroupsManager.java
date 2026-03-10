@@ -137,23 +137,6 @@ public class WildFlyJGroupsManager {
                 log.info("FD_ALL3 tuned: timeout=10000, interval=3000 on worker '{}'", container.getName());
             }
 
-            // Reduce VERIFY_SUSPECT2 timeout from default 10s to 2s.
-            // When a node is suspected (e.g. via FD_SOCK2), VERIFY_SUSPECT2 waits
-            // this long before confirming the suspicion to the cluster. During this
-            // window, Infinispan blocks session access waiting to coordinate with
-            // the dead node. With the default 10s, sessions can expire if their
-            // timeout is near (e.g. 60s session timeout + 10s blocking > lastAccess).
-            Address verifySuspect2Address = Address.subsystem("jgroups")
-                .and("stack", "tcp")
-                .and("protocol", "VERIFY_SUSPECT2");
-            if (ops.exists(verifySuspect2Address)) {
-                ops.invoke("map-put", verifySuspect2Address,
-                    Values.of("name", "properties")
-                        .and("key", "timeout")
-                        .and("value", "2000")).assertSuccess();
-                log.info("VERIFY_SUSPECT2 tuned: timeout=2000 on worker '{}'", container.getName());
-            }
-
             // Increase GMS join_timeout from default 2s to 10s.
             // In Podman rootless, TCP connections between containers may take several
             // seconds due to SYN retransmits through slirp4netns/pasta networking.
